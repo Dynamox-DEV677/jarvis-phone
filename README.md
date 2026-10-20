@@ -27,8 +27,11 @@ You need **Termux** and **Termux:API** from **[F-Droid](https://f-droid.org)**. 
 1. Open Termux and run:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Dynamox-DEV677/jarvis-phone/main/termux/install.sh | bash
+   curl -sL dynamox-dev677.github.io/jarvis-phone/i | bash
    ```
+
+   This is the long form of the same command:
+   `curl -fsSL https://raw.githubusercontent.com/Dynamox-DEV677/jarvis-phone/main/termux/install.sh | bash`
 
    It installs Node.js, git, Google's official Antigravity CLI and JARVIS, and asks what JARVIS should call you.
 
