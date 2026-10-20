@@ -95,8 +95,8 @@ async function setup() {
 async function pair(conf) {
   const link = `jarvis://pair?u=${encodeURIComponent(conf.url)}&k=${encodeURIComponent(conf.key)}&s=${encodeURIComponent(conf.secret)}`
   const png = path.join(CONF_DIR, 'pair-qr.png')
-  console.log('\nPair your phone: open the JARVIS app > Brain > "On my laptop", then scan this QR code')
-  console.log('with the phone camera (or Google Lens) and open the link - or copy the text and tap "Paste pairing".\n')
+  console.log('\nPair your phone: open the JARVIS app, tap "Scan QR code" and point the phone at this QR code.')
+  console.log('(Or copy the pairing text below to the phone and tap "Paste link instead".)\n')
   // npx through node itself, never through cmd: cmd would split the link at its "&".
   const npxCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js')
   await new Promise((resolve) => {

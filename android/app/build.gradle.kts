@@ -21,8 +21,8 @@ android {
         applicationId = "dev.kairo.jarvis"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     signingConfigs {
@@ -60,4 +60,7 @@ dependencies {
     // Offline speech recognition, used only to hear the wake word "Jarvis".
     implementation("net.java.dev.jna:jna:5.13.0@aar")
     implementation("com.alphacephei:vosk-android:0.3.47@aar")
+    // Google's QR scanner from Play services, for pairing with the laptop. Needs no camera permission.
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    implementation("com.google.android.gms:play-services-base:18.5.0")
 }

@@ -14,6 +14,8 @@
 
     <queries>
         <package android:name="com.termux" />
+        <!-- "Live screen" opens Chrome Remote Desktop when it's installed. -->
+        <package android:name="com.google.chromeremotedesktop" />
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>

@@ -40,7 +40,7 @@ phone (anywhere) ──▶ your Supabase project (jarvis_jobs) ◀── realtim
 3. On the laptop, get this repo (`git clone https://github.com/Dynamox-DEV677/jarvis-phone`) and double-click **`pc\SETUP-JARVIS-LAPTOP.cmd`**. Paste:
    - the **Project URL** (Settings → API);
    - the **anon / publishable key**. Never the secret / service_role key.
-4. A QR code opens. Scan it with your phone camera and open the link in JARVIS. The app should say **Laptop online**.
+4. A QR code opens. In the JARVIS app, tap **Scan QR code** and point the phone at it. The scanner is Google's, built into Play services: no camera permission, and the first time it downloads in a few seconds. The app should then say **Online**.
 5. Double-click **`pc\START-JARVIS-LAPTOP.cmd`** and keep it running. **`pc\ADD-TO-STARTUP.cmd`** makes it start whenever you sign in.
 
 You only need the JARVIS app on the phone: no Termux and no `agy` sign-in there. Say "send me a screenshot" or tap **Laptop screenshot**, and the laptop's screen appears on your phone. Any screenshot JARVIS takes while doing a task comes to your phone too.

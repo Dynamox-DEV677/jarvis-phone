@@ -134,6 +134,21 @@ class RelayClient(context: Context, private val prefs: Prefs) : Brain {
         }
     }
 
+    /** What the home screen shows about the laptop. [problem] is set when Supabase can't be reached. */
+    class Laptop(val paired: Boolean, val online: Boolean, val host: String, val lastSeen: String, val problem: String?)
+
+    fun laptop(done: (Laptop) -> Unit) {
+        io.execute {
+            val s = if (!paired()) Laptop(false, false, "", "", null)
+            else runCatching {
+                val row = JSONArray(rpc("jarvis_status", JSONObject())).optJSONObject(0)
+                fun field(name: String) = if (row == null || row.isNull(name)) "" else row.optString(name)
+                Laptop(true, row?.optBoolean("online") == true, field("host"), field("last_seen"), null)
+            }.getOrElse { Laptop(true, false, "", "", it.message ?: "no internet?") }
+            post { done(s) }
+        }
+    }
+
     private fun post(r: () -> Unit) = main.post(r)
 
     companion object {
