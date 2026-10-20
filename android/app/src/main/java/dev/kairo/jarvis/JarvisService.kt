@@ -29,7 +29,9 @@ class JarvisService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: Prefs
     private lateinit var overlays: Overlays
-    private lateinit var brain: BrainClient
+    private lateinit var termux: BrainClient
+    private lateinit var relay: RelayClient
+    private val brain: Brain get() = if (prefs.mode == "laptop") relay else termux
     private lateinit var speaker: Speaker
     private lateinit var listener: Listener
     private lateinit var wake: WakeWord
@@ -45,7 +47,8 @@ class JarvisService : Service() {
         instance = this
         prefs.running = true
         overlays = Overlays(this, prefs, onOrbTap = { activate() }, onOrbLongPress = { openApp() })
-        brain = BrainClient(prefs)
+        termux = BrainClient(prefs)
+        relay = RelayClient(this, prefs)
         speaker = Speaker(this, prefs)
         listener = Listener(this, prefs)
         wake = WakeWord(this) { if (state == State.IDLE) listen() }
@@ -103,6 +106,7 @@ class JarvisService : Service() {
                 say("Starting a new conversation.")
                 brain.reset()
             }
+            prefs.mode == "laptop" && SCREENSHOT.containsMatchIn(t) -> screenshot()
             else -> ask(text, retried = false)
         }
     }
@@ -114,12 +118,12 @@ class JarvisService : Service() {
         overlays.showGlow(EdgeGlowView.Mode.THINKING)
         overlays.setGlowMode(EdgeGlowView.Mode.THINKING)
         overlays.caption("“$text”")
-        brain.ask(text, object : BrainClient.Listener {
+        brain.ask(text, object : Brain.Listener {
             override fun onTool(name: String) { if (my == turn) overlays.caption(toolLabel(name)) }
-            override fun onReply(text: String) { if (my == turn) say(text.ifBlank { "Done." }) }
+            override fun onReply(text: String, images: List<java.io.File>) { if (my == turn) { showShots(images); say(text.ifBlank { "Done." }) } }
             override fun onError(message: String, brainDown: Boolean) {
                 if (my != turn) return
-                if (brainDown && !retried && Termux.startBrain(this@JarvisService)) {
+                if (brainDown && !retried && prefs.mode == "phone" && Termux.startBrain(this@JarvisService)) {
                     overlays.caption("Starting my brain in Termux…")
                     main.postDelayed({ if (my == turn) ask(text, retried = true) }, 9000)
                 } else if (brainDown) {
@@ -129,6 +133,31 @@ class JarvisService : Service() {
                 }
             }
         })
+    }
+
+    /** "Send me a screenshot": straight to the laptop, no thinking needed. */
+    private fun screenshot() {
+        val my = ++turn
+        state = State.THINKING
+        overlays.orb.active = true
+        overlays.showGlow(EdgeGlowView.Mode.THINKING)
+        overlays.setGlowMode(EdgeGlowView.Mode.THINKING)
+        overlays.caption("Getting your laptop screen…")
+        brain.screenshot(object : Brain.Listener {
+            override fun onTool(name: String) { if (my == turn) overlays.caption(toolLabel(name)) }
+            override fun onReply(text: String, images: List<java.io.File>) { if (my == turn) { showShots(images); say(text) } }
+            override fun onError(message: String, brainDown: Boolean) { if (my == turn) say(message) }
+        })
+    }
+
+    private fun showShots(images: List<java.io.File>) {
+        if (images.isEmpty()) return
+        // Allowed from the background because JARVIS may draw over other apps.
+        runCatching {
+            startActivity(Intent(this, ShotActivity::class.java)
+                .putExtra(ShotActivity.EXTRA_FILES, images.map { it.absolutePath }.toTypedArray())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK))
+        }
     }
 
     private fun say(text: String) {
@@ -161,7 +190,7 @@ class JarvisService : Service() {
         if (prefs.wakeWord && wake.modelReady) main.postDelayed({ if (state == State.IDLE) wake.start() }, 400)
     }
 
-    private fun toolLabel(name: String) = when (name) {
+    private fun toolLabel(name: String) = if (name.contains(' ')) name else when (name) {
         "pc_status" -> "Checking your PC…"
         "pc_open" -> "Opening it on your PC…"
         "pc_screenshot" -> "Looking at your PC screen…"
@@ -245,6 +274,7 @@ class JarvisService : Service() {
         private const val CHANNEL = "jarvis"
         private const val NOTIFICATION_ID = 7
         private val STOP_WORDS = setOf("stop", "cancel", "never mind", "nevermind", "nothing", "shut up", "be quiet", "that's all", "thats all", "thank you", "thanks")
+        private val SCREENSHOT = Regex("\\b(screenshot|screen ?shot|my (laptop|pc|computer) screen|what'?s on (my|the) (laptop|pc|computer|screen))\\b")
         private val NEW_CHAT = Regex("^(start )?(a )?new (chat|conversation)|start over|reset( the)? (chat|conversation)$")
 
         @Volatile var instance: JarvisService? = null

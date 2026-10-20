@@ -17,13 +17,14 @@
  * JARVIS on this PC to do a task, and asking Claude Code (read, search, and edit files inside the
  * project folders you list - it can never run commands).
  */
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import dgram from 'node:dgram'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { captureScreen, ps } from './screen.mjs'
 
 const VERSION = '1.0.0'
 const HOME = os.homedir()
@@ -68,17 +69,6 @@ mkdirSync(OUT, { recursive: true })
 for (const p of Object.values(CONF.claudeProjects)) if (p.startsWith(OUT)) mkdirSync(p, { recursive: true })
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
-
-// UTF-8 out, always: Windows PowerShell writes stdout in the OEM code page otherwise.
-const PS_PRELUDE = '[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference="Stop";'
-
-function ps(script, { timeoutMs = 20_000, env } = {}) {
-  return new Promise((resolve, reject) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_PRELUDE + script],
-      { timeout: timeoutMs, windowsHide: true, maxBuffer: 32 << 20, encoding: 'utf8', env: env ? { ...process.env, ...env } : process.env },
-      (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).trim().slice(0, 500))) : resolve(String(stdout))))
-  })
-}
 
 /** Run a program (never through a shell), feed it stdin, collect stdout. */
 function run(file, args, { cwd, input, timeoutMs }) {
@@ -194,26 +184,7 @@ async function pcOpen({ target, args } = {}) {
 /* ── pc_screenshot ────────────────────────────────────────────────────────── */
 
 async function pcScreenshot({ question } = {}) {
-  const out = await ps(`
-Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public static class JDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }'
-[JDpi]::SetProcessDPIAware() | Out-Null
-$dir = $env:J_DIR; New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$file = Join-Path $dir ('screen-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.png')
-$v = [System.Windows.Forms.SystemInformation]::VirtualScreen
-$bmp = New-Object System.Drawing.Bitmap $v.Width, $v.Height
-$g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($v.Left, $v.Top, 0, 0, $bmp.Size); $g.Dispose()
-$bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
-$w = [Math]::Min(1280, $v.Width); $h = [int]($v.Height * $w / $v.Width)
-$small = New-Object System.Drawing.Bitmap $w, $h
-$g2 = [System.Drawing.Graphics]::FromImage($small); $g2.InterpolationMode = 'HighQualityBicubic'; $g2.DrawImage($bmp, 0, 0, $w, $h); $g2.Dispose(); $bmp.Dispose()
-$preview = [IO.Path]::ChangeExtension($file, '.preview.jpg')
-$small.Save($preview, [System.Drawing.Imaging.ImageFormat]::Jpeg); $small.Dispose()
-[pscustomobject]@{ file = $file; preview = $preview; w = $v.Width; h = $v.Height } | ConvertTo-Json -Compress`,
-  { env: { J_DIR: path.join(OUT, 'screenshots') }, timeoutMs: 30_000 })
-  // PowerShell only writes the files. (Defender's script scanner flags a PowerShell script that
-  // captures the screen AND encodes it, as spyware would.)
-  const r = JSON.parse(out)
+  const r = await captureScreen(path.join(OUT, 'screenshots'))
   // The Antigravity CLI doesn't hand images from MCP tools to the model, so the PC looks at the
   // picture itself and answers in words.
   const ask = String(question || '').trim() || 'What is on the screen? Name the apps and what they show.'

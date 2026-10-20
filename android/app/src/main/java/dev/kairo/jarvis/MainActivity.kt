@@ -33,6 +33,7 @@ import android.widget.TextView
 class MainActivity : Activity() {
     private lateinit var prefs: Prefs
     private lateinit var brain: BrainClient
+    private lateinit var relay: RelayClient
     private var speaker: Speaker? = null
     private val dp by lazy { resources.displayMetrics.density }
     private val refreshers = mutableListOf<() -> Unit>()
@@ -47,7 +48,30 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         brain = BrainClient(prefs)
+        relay = RelayClient(this, prefs)
         build()
+        handlePairing(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handlePairing(intent)
+    }
+
+    /** The QR code on the laptop opens jarvis://pair?u=…&k=…&s=… here. */
+    private fun handlePairing(intent: Intent?) {
+        val data = intent?.dataString ?: return
+        pairWith(data)
+    }
+
+    private fun pairWith(text: String) {
+        val p = RelayClient.parsePairing(text)
+        if (p == null) { info("That isn't a pairing code", "Scan the QR code that SETUP-JARVIS-LAPTOP shows on your laptop, or copy its pairing text (it starts with jarvis://pair)."); return }
+        prefs.relayUrl = p.first; prefs.relayKey = p.second; prefs.relaySecret = p.third
+        prefs.mode = "laptop"
+        refreshService()
+        refreshers.forEach { it() }
+        info("Paired with your laptop", "JARVIS will now think on your laptop, from anywhere. Keep JARVIS running on the laptop.")
     }
 
     override fun onResume() {
@@ -116,9 +140,31 @@ class MainActivity : Activity() {
         })
         col.addView(perms)
 
-        // Brain
+        // Brain: on the laptop (anywhere, through Supabase) or in Termux on this phone
         col.addView(section("Brain"))
-        val b = cardBox()
+        val laptopBtn = button("On my laptop", primary = false) { prefs.mode = "laptop"; refreshService(); refreshers.forEach { it() } }
+        val phoneBtn = button("On this phone", primary = false) { prefs.mode = "phone"; refreshService(); refreshers.forEach { it() } }
+        col.addView(row(laptopBtn, phoneBtn).apply { (layoutParams as LinearLayout.LayoutParams).topMargin = 0 })
+
+        val l = cardBox().apply { layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(10) } }
+        l.addView(text("JARVIS on your laptop answers from anywhere: home Wi-Fi or mobile data. On the laptop run SETUP-JARVIS-LAPTOP once, then scan its QR code with your camera.", 13f, dim))
+        val lStatus = text("", 13f, dim).apply { setPadding(0, px(8), 0, 0) }
+        l.addView(row(
+            button("Paste pairing", primary = false) {
+                val clip = (getSystemService(ClipboardManager::class.java)).primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+                pairWith(clip)
+            },
+            button("Test", primary = false) { checkLaptop(lStatus) },
+        ))
+        l.addView(lStatus)
+        l.addView(button("Laptop screenshot", primary = false) {
+            if (!JarvisService.running && !canRun()) info("Not yet", "Give JARVIS the microphone and \"Display over other apps\" permissions first.")
+            else JarvisService.send(this, JarvisService.ACTION_ASK, "send me a screenshot")
+        }.apply { layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(10) } })
+        l.addView(text("To see and control the whole laptop screen live, use Google's free Chrome Remote Desktop app.", 12f, dim).apply { setPadding(0, px(10), 0, 0) })
+        col.addView(l)
+
+        val b = cardBox().apply { layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(10) } }
         b.addView(text("Paste the token that Termux shows for: jarvis token", 13f, dim))
         val token = input(prefs.token, "Token", secret = true)
         b.addView(token)
@@ -141,7 +187,17 @@ class MainActivity : Activity() {
         token.setOnFocusChangeListener { _, f -> if (!f) prefs.token = token.text.toString() }
         b.addView(addr)
         col.addView(b)
-        refreshers += { if (prefs.token.isNotEmpty()) check(status) else status.text = "No token yet." }
+        refreshers += {
+            val laptop = prefs.mode == "laptop"
+            l.visibility = if (laptop) View.VISIBLE else View.GONE
+            b.visibility = if (laptop) View.GONE else View.VISIBLE
+            for ((btn, on) in listOf(laptopBtn to laptop, phoneBtn to !laptop)) {
+                (btn.background as GradientDrawable).apply { if (on) { setColor(0xFF3A2410.toInt()); setStroke(px(2), orange) } else { setColor(0xFF20232A.toInt()); setStroke(px(1), 0xFF3A3E47.toInt()) } }
+                btn.setTextColor(if (on) orange else dim)
+            }
+            if (laptop) checkLaptop(lStatus)
+            else if (prefs.token.isNotEmpty()) check(status) else status.text = "No token yet."
+        }
 
         // Settings
         col.addView(section("JARVIS"))
@@ -221,6 +277,11 @@ class MainActivity : Activity() {
     }
 
     private fun refreshService() { if (JarvisService.running) JarvisService.send(this, JarvisService.ACTION_START) }
+
+    private fun checkLaptop(status: TextView) {
+        status.text = "Checking…"
+        relay.health { ok, msg -> status.text = msg; status.setTextColor(if (ok) good else orange) }
+    }
 
     private fun check(status: TextView) {
         status.text = "Checking…"

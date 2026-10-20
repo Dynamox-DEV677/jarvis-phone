@@ -15,6 +15,23 @@ class Prefs(context: Context) {
         get() = p.getString("token", "") ?: ""
         set(v) = p.edit().putString("token", v.trim()).apply()
 
+    /** "laptop": think on the laptop through Supabase; "phone": the brain in Termux. */
+    var mode: String
+        get() = p.getString("mode", "laptop") ?: "laptop"
+        set(v) = p.edit().putString("mode", v).apply()
+
+    var relayUrl: String
+        get() = p.getString("relayUrl", "") ?: ""
+        set(v) = p.edit().putString("relayUrl", v.trim().trimEnd('/')).apply()
+
+    var relayKey: String
+        get() = p.getString("relayKey", "") ?: ""
+        set(v) = p.edit().putString("relayKey", v.trim()).apply()
+
+    var relaySecret: String
+        get() = p.getString("relaySecret", "") ?: ""
+        set(v) = p.edit().putString("relaySecret", v.trim()).apply()
+
     var orb: Boolean
         get() = p.getBoolean("orb", true)
         set(v) = p.edit().putBoolean("orb", v).apply()

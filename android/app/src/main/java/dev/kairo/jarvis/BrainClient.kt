@@ -16,12 +16,7 @@ import java.util.concurrent.Executors
  * Answers arrive as newline-delimited JSON, so the screen can show what JARVIS is doing.
  * Every callback runs on the main thread.
  */
-class BrainClient(private val prefs: Prefs) {
-    interface Listener {
-        fun onTool(name: String)
-        fun onReply(text: String)
-        fun onError(message: String, brainDown: Boolean)
-    }
+class BrainClient(private val prefs: Prefs) : Brain {
 
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -37,7 +32,7 @@ class BrainClient(private val prefs: Prefs) {
         return c
     }
 
-    fun ask(text: String, listener: Listener) {
+    override fun ask(text: String, listener: Brain.Listener) {
         io.execute {
             var c: HttpURLConnection? = null
             try {
@@ -61,7 +56,7 @@ class BrainClient(private val prefs: Prefs) {
                         val ev = runCatching { JSONObject(line) }.getOrNull() ?: continue
                         when (ev.optString("type")) {
                             "tool" -> ev.optString("name").let { n -> post { listener.onTool(n) } }
-                            "reply" -> { done = true; ev.optString("text").let { t -> post { listener.onReply(t) } } }
+                            "reply" -> { done = true; ev.optString("text").let { t -> post { listener.onReply(t, emptyList()) } } }
                             "error" -> { done = true; ev.optString("message").let { m -> post { listener.onError(m, false) } } }
                         }
                     }
@@ -82,13 +77,17 @@ class BrainClient(private val prefs: Prefs) {
     }
 
     /** Stop waiting for the current answer (the brain finishes it in the background). */
-    fun cancel() {
+    override fun screenshot(listener: Brain.Listener) {
+        post { listener.onError("Screenshots come from the laptop. Switch the brain to \"On my laptop\" in the app.", false) }
+    }
+
+    override fun cancel() {
         val c = current
         current = null
         if (c != null) io.execute { runCatching { c.disconnect() } }
     }
 
-    fun reset(done: (Boolean) -> Unit = {}) {
+    override fun reset(done: (Boolean) -> Unit) {
         io.execute {
             val ok = runCatching { open("/reset", "POST", 5000).run { doOutput = true; outputStream.close(); val r = responseCode; disconnect(); r == 200 } }.getOrDefault(false)
             post { done(ok) }
@@ -96,7 +95,7 @@ class BrainClient(private val prefs: Prefs) {
     }
 
     /** One line for the setup screen, e.g. "Connected · PC online". */
-    fun health(done: (ok: Boolean, text: String) -> Unit) {
+    override fun health(done: (ok: Boolean, text: String) -> Unit) {
         io.execute {
             val result = try {
                 val c = open("/health", "GET", 5000)

@@ -20,7 +20,38 @@ A voice assistant for Android. Tap the orange orb on the right edge of the scree
  └──────────────────────────────┘
 ```
 
-## 1. Set up the phone
+## Two places JARVIS can think
+
+| | **On your laptop** (recommended) | **On your phone** |
+|---|---|---|
+| Brain | Your Antigravity `jarvis` agent on the laptop | `agy` inside Termux on the phone |
+| Works from | Anywhere: home Wi-Fi or mobile data | Anywhere, but no laptop access |
+| Needs | Laptop on, with JARVIS running; a free Supabase project | Termux + `agy` signed in on the phone |
+| Laptop screenshots | Yes, sent to the phone | Only on the same Wi-Fi |
+
+## Laptop setup (works from anywhere)
+
+```
+phone (anywhere) ──▶ your Supabase project (jarvis_jobs) ◀── realtime ── laptop worker ──▶ JARVIS (agy)
+```
+
+1. **Make a free Supabase project** at [supabase.com](https://supabase.com) → New project. Name it `jarvis-relay` and pick the Mumbai region.
+2. In the project, open **SQL Editor** → **New query**. Paste all of [`supabase/relay.sql`](supabase/relay.sql) and press **Run**.
+3. On the laptop, get this repo (`git clone https://github.com/Dynamox-DEV677/jarvis-phone`) and double-click **`pc\SETUP-JARVIS-LAPTOP.cmd`**. Paste:
+   - the **Project URL** (Settings → API);
+   - the **anon / publishable key**. Never the secret / service_role key.
+4. A QR code opens. Scan it with your phone camera and open the link in JARVIS. The app should say **Laptop online**.
+5. Double-click **`pc\START-JARVIS-LAPTOP.cmd`** and keep it running. **`pc\ADD-TO-STARTUP.cmd`** makes it start whenever you sign in.
+
+You only need the JARVIS app on the phone: no Termux and no `agy` sign-in there. Say "send me a screenshot" or tap **Laptop screenshot**, and the laptop's screen appears on your phone. Any screenshot JARVIS takes while doing a task comes to your phone too.
+
+**Security:** the phone and laptop share one long secret, made by the laptop and stored in `%USERPROFILE%\.jarvis-phone\relay.json`. The database refuses everything without it. Anyone who has it can give your laptop tasks, so treat the QR code like a password and delete `pair-qr.png` after pairing. To change the secret, delete `relay.json`, run setup again, and re-pair.
+
+**Keep the laptop awake:** in Windows Settings → System → Power, set sleep to *Never* while plugged in, and closing the lid to *Do nothing*. A sleeping laptop can't answer.
+
+**Live screen mirroring:** use Google's free **Chrome Remote Desktop**. On the laptop, go to remotedesktop.google.com/access and set up remote access with a PIN. On the phone, install the Chrome Remote Desktop app and sign in with the same Google account.
+
+## Phone-only setup (Termux)
 
 You need **Termux** and **Termux:API** from **[F-Droid](https://f-droid.org)**. The Play Store version of Termux is outdated and won't work. Install both apps from F-Droid.
 
