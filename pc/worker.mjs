@@ -100,11 +100,13 @@ async function pair(conf) {
   // npx through node itself, never through cmd: cmd would split the link at its "&".
   const npxCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js')
   await new Promise((resolve) => {
-    execFile(process.execPath, [npxCli, '--yes', 'qrcode@1.5.4', '-o', png, '-w', '600', link], { windowsHide: true }, (err) => {
+    const p = execFile(process.execPath, [npxCli, '--yes', 'qrcode@1.5.4', '-o', png, '-w', '600', link], { windowsHide: true, timeout: 120_000 }, (err) => {
       if (err) console.log('(Could not make the QR picture - use the text below.)')
       else { console.log(`QR code: ${png}`); execFile('cmd', ['/c', 'start', '', png], { windowsHide: true }, () => {}) }
       resolve()
     })
+    // The qrcode tool reads stdin whenever it isn't a terminal: close it, or it waits forever.
+    p.stdin?.end()
   })
   console.log(`\nPairing text (a password - don't share it):\n${link}\n`)
   console.log('When the app says "Laptop online", delete the QR picture.')
