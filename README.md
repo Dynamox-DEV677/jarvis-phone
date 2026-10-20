@@ -47,6 +47,8 @@ You only need the JARVIS app on the phone: no Termux and no `agy` sign-in there.
 
 **Security:** the phone and laptop share one long secret, made by the laptop and stored in `%USERPROFILE%\.jarvis-phone\relay.json`. The database refuses everything without it. Anyone who has it can give your laptop tasks, so treat the QR code like a password and delete `pair-qr.png` after pairing. To change the secret, delete `relay.json`, run setup again, and re-pair.
 
+**JARVIS's voice:** the laptop records every reply in a British neural voice (Microsoft's free "Ryan" voice, through [edge-tts](https://github.com/rany2/edge-tts)) and sends it with the answer. The orange glow blinks on each word. For this you need [Python](https://www.python.org) on the laptop; `START-JARVIS-LAPTOP` installs and updates edge-tts by itself. Without it, the phone uses its own voice. To change the voice, add `"voice": "en-GB-ThomasNeural"` to `relay.json`. List the voices with `python -m edge_tts --list-voices`. `""` turns it off. In the app, **Voice** lets you pick one of the phone's voices instead.
+
 **Keep the laptop awake:** in Windows Settings → System → Power, set sleep to *Never* while plugged in, and closing the lid to *Do nothing*. A sleeping laptop can't answer.
 
 **Live screen mirroring:** use Google's free **Chrome Remote Desktop**. On the laptop, go to remotedesktop.google.com/access and set up remote access with a PIN. On the phone, install the Chrome Remote Desktop app and sign in with the same Google account.

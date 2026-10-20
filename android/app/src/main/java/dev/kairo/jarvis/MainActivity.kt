@@ -468,10 +468,7 @@ class MainActivity : Activity() {
         }) {
             @Suppress("BatteryLife") startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
         })
-        s.addView(Pill("Test voice", LineIcon.Kind.MIC, Style.GHOST) {
-            tts().applySettings()
-            tts().speak("Good evening. JARVIS is online and ready when you are.", object : Speaker.Listener { override fun onWord() {}; override fun onDone() {} })
-        }, lp(top = 10))
+        s.addView(Pill("Test voice", LineIcon.Kind.MIC, Style.GHOST) { testVoice() }, lp(top = 10))
         col.addView(s, lp(top = 14))
 
         // Where JARVIS thinks
@@ -590,21 +587,28 @@ class MainActivity : Activity() {
 
     private fun tts(): Speaker = speaker ?: Speaker(this, prefs).also { speaker = it }
 
-    private fun voiceLabel() = prefs.voiceName.ifEmpty { "Phone default" }.substringAfterLast('#').let { if (it.length > 22) it.take(21) + "…" else it }
+    private fun voiceLabel() = if (prefs.voiceName.isEmpty()) "JARVIS" else prefs.voiceName.substringAfterLast('#').let { if (it.length > 22) it.take(21) + "…" else it }
 
     private fun languageLabel() = languages.firstOrNull { it.first == prefs.language }?.second ?: Locale.forLanguageTag(prefs.language).displayName
 
+    /** "JARVIS" (the laptop's British neural voice) first, then the phone's own voices. */
     private fun chooseVoice() {
         val voices = tts().voices()
-        if (voices.isEmpty()) { info("No voices yet", "Your phone's text-to-speech is still starting, or has no voices for this language. Try again in a moment, or install voices in Settings › Text-to-speech."); return }
-        val names = voices.map { v -> "${v.locale.displayName} · ${v.name.substringAfterLast('#').replace('-', ' ')}" }.toTypedArray()
+        val names = (listOf("JARVIS · British, sent by your laptop (best)") +
+            voices.map { v -> "Phone · ${v.locale.displayName} · ${v.name.substringAfterLast('#').replace('-', ' ')}" }).toTypedArray()
         AlertDialog.Builder(this).setTitle("Voice").setItems(names) { _, i ->
-            prefs.voiceName = voices[i].name
+            prefs.voiceName = if (i == 0) "" else voices[i - 1].name
             tts().applySettings()
             refreshService()
             refresh()
-            tts().speak("This is how I sound now.", object : Speaker.Listener { override fun onWord() {}; override fun onDone() {} })
+            testVoice()
         }.show()
+    }
+
+    private fun testVoice() {
+        tts().applySettings()
+        val line = if (prefs.voiceName.isEmpty()) "At your service. JARVIS is online and ready when you are." else "This is how I sound now."
+        tts().speak(line, object : Speaker.Listener { override fun onWord() {}; override fun onDone() {} })
     }
 
     private fun chooseLanguage() {

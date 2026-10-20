@@ -10,7 +10,8 @@ interface Brain {
     interface Listener {
         /** A tool name ("pc_status") or a ready-made label ("Searching the web…"). */
         fun onTool(name: String)
-        fun onReply(text: String, images: List<File>)
+        /** [speech] is the reply already spoken in JARVIS's voice by the laptop, when it could. */
+        fun onReply(text: String, images: List<File>, speech: Speech? = null)
         fun onError(message: String, brainDown: Boolean)
     }
 
@@ -20,3 +21,6 @@ interface Brain {
     fun reset(done: (Boolean) -> Unit = {})
     fun health(done: (ok: Boolean, text: String) -> Unit)
 }
+
+/** Recorded speech (an mp3) and when each word starts in it, in ms, so the glow can blink in time. */
+class Speech(val file: File, val wordsMs: IntArray)

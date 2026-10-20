@@ -20,6 +20,7 @@ class RelayClient(context: Context, private val prefs: Prefs) : Brain {
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val shots = File(context.cacheDir, "shots")
+    private val voice = File(context.cacheDir, "voice")
     @Volatile private var waiting = 0 // bumps on cancel, so an old poll loop stops
 
     private fun rpc(fn: String, args: JSONObject, timeoutMs: Int = 15_000): String {
@@ -76,8 +77,9 @@ class RelayClient(context: Context, private val prefs: Prefs) : Brain {
                         "done" -> {
                             val out = row.optJSONObject("output") ?: JSONObject()
                             val files = saveImages(out.optJSONArray("images"))
+                            val speech = saveSpeech(out.optJSONObject("voice"))
                             val reply = out.optString("text", "Done.")
-                            post { if (my == waiting) listener.onReply(reply, files) }
+                            post { if (my == waiting) listener.onReply(reply, files, speech) }
                             return@execute
                         }
                         "error" -> {
@@ -89,7 +91,7 @@ class RelayClient(context: Context, private val prefs: Prefs) : Brain {
                     if (System.currentTimeMillis() > deadline) { post { if (my == waiting) listener.onError("The laptop took too long.", false) }; return@execute }
                 }
             } catch (e: Exception) {
-                post { if (my == waiting) listener.onError("I couldn't reach the laptop: ${e.message ?: "no internet?"}", false) }
+                post { if (my == waiting) listener.onError("I couldn't reach the laptop. Check your internet connection.", false) }
             }
         }
     }
@@ -108,6 +110,21 @@ class RelayClient(context: Context, private val prefs: Prefs) : Brain {
             out += f
         }
         return out
+    }
+
+    /** The laptop's recording of the reply in JARVIS's voice, if it sent one. */
+    private fun saveSpeech(v: JSONObject?): Speech? {
+        if (v == null) return null
+        return runCatching {
+            val bytes = Base64.decode(v.optString("data"), Base64.DEFAULT)
+            if (bytes.isEmpty()) return null
+            voice.mkdirs()
+            voice.listFiles()?.forEach { it.delete() }
+            val f = File(voice, "reply-${System.currentTimeMillis()}.mp3")
+            f.writeBytes(bytes)
+            val w = v.optJSONArray("words") ?: JSONArray()
+            Speech(f, IntArray(w.length()) { w.optInt(it) })
+        }.getOrNull()
     }
 
     override fun cancel() { waiting++ }

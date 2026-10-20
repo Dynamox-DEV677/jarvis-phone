@@ -120,7 +120,7 @@ class JarvisService : Service() {
         overlays.caption("“$text”")
         brain.ask(text, object : Brain.Listener {
             override fun onTool(name: String) { if (my == turn) overlays.caption(toolLabel(name)) }
-            override fun onReply(text: String, images: List<java.io.File>) { if (my == turn) { showShots(images); say(text.ifBlank { "Done." }) } }
+            override fun onReply(text: String, images: List<java.io.File>, speech: Speech?) { if (my == turn) { showShots(images); say(text.ifBlank { "Done." }, speech) } }
             override fun onError(message: String, brainDown: Boolean) {
                 if (my != turn) return
                 if (brainDown && !retried && prefs.mode == "phone" && Termux.startBrain(this@JarvisService)) {
@@ -145,7 +145,7 @@ class JarvisService : Service() {
         overlays.caption("Getting your laptop screen…")
         brain.screenshot(object : Brain.Listener {
             override fun onTool(name: String) { if (my == turn) overlays.caption(toolLabel(name)) }
-            override fun onReply(text: String, images: List<java.io.File>) { if (my == turn) { showShots(images); say(text) } }
+            override fun onReply(text: String, images: List<java.io.File>, speech: Speech?) { if (my == turn) { showShots(images); say(text, speech) } }
             override fun onError(message: String, brainDown: Boolean) { if (my == turn) say(message) }
         })
     }
@@ -160,14 +160,15 @@ class JarvisService : Service() {
         }
     }
 
-    private fun say(text: String) {
+    /** [speech]: the laptop's recording of [text] in JARVIS's voice, when it sent one. */
+    private fun say(text: String, speech: Speech? = null) {
         val my = ++turn
         state = State.SPEAKING
         overlays.orb.active = true
         overlays.showGlow(EdgeGlowView.Mode.SPEAKING)
         overlays.setGlowMode(EdgeGlowView.Mode.SPEAKING)
         overlays.caption(Speaker.clean(text))
-        speaker.speak(text, object : Speaker.Listener {
+        speaker.speak(text, speech = speech, l = object : Speaker.Listener {
             override fun onWord() { if (my == turn) overlays.glow.pulse() }
             override fun onDone() {
                 if (my != turn) return

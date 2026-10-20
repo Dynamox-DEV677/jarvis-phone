@@ -1,6 +1,8 @@
 package dev.kairo.jarvis
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -10,8 +12,12 @@ import android.speech.tts.Voice
 import java.util.Locale
 
 /**
- * Speaks JARVIS's replies with the phone's own text-to-speech, and reports every word as it is
- * spoken so the glow can pulse with it.
+ * Speaks JARVIS's replies and reports every word as it is spoken, so the glow can pulse with it.
+ *
+ * The real JARVIS voice is a recording: the laptop sends each reply already spoken (Microsoft's
+ * British "Ryan" voice), and a few things the phone says by itself ship with the app
+ * (VoiceClips). Anything else uses the phone's own text-to-speech, set to a British male voice.
+ * Choosing a phone voice in the app turns the recordings off.
  */
 class Speaker(context: Context, private val prefs: Prefs) {
     interface Listener {
@@ -19,14 +25,17 @@ class Speaker(context: Context, private val prefs: Prefs) {
         fun onDone()
     }
 
+    private val ctx = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private var ready = false
     private var pending: Pair<String, Listener>? = null
     private var listener: Listener? = null
     private var lastId = ""
     private var serial = 0
+    private var player: MediaPlayer? = null
+    private var tick: Runnable? = null
 
-    private val tts: TextToSpeech = TextToSpeech(context.applicationContext) { status ->
+    private val tts: TextToSpeech = TextToSpeech(ctx) { status ->
         main.post {
             ready = status == TextToSpeech.SUCCESS
             if (ready) applySettings()
@@ -46,15 +55,31 @@ class Speaker(context: Context, private val prefs: Prefs) {
         })
     }
 
+    /** True while the JARVIS voice is chosen (the default), rather than one of the phone's voices. */
+    private val jarvisVoice: Boolean get() = prefs.voiceName.isEmpty()
+
     fun applySettings() {
         if (!ready) return
         val lang = prefs.language.split('-')
         val locale = if (lang.size > 1) Locale(lang[0], lang[1]) else Locale(lang[0])
         if (tts.isLanguageAvailable(locale) >= TextToSpeech.LANG_AVAILABLE) tts.language = locale
         else tts.language = Locale.UK
-        val wanted = prefs.voiceName
-        if (wanted.isNotEmpty()) runCatching { tts.voices?.firstOrNull { it.name == wanted }?.let { tts.voice = it } }
+        val all = runCatching { tts.voices }.getOrNull().orEmpty()
+        val pick = if (jarvisVoice) britishMale(all) else all.firstOrNull { it.name == prefs.voiceName }
+        if (pick != null) runCatching { tts.voice = pick }
+        // A touch deeper, closer to JARVIS, when standing in for the JARVIS voice.
+        tts.setPitch(if (jarvisVoice) 0.9f else 1f)
         tts.setSpeechRate(prefs.speechRate / 100f)
+    }
+
+    /** Google's British male voices first, then any installed British voice. */
+    private fun britishMale(all: Collection<Voice>): Voice? {
+        val gb = all.filter {
+            it.locale.language == "en" && it.locale.country == "GB" && !it.isNetworkConnectionRequired &&
+                TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features.orEmpty()
+        }
+        for (id in listOf("x-rjs", "x-gbd", "x-gbb")) gb.firstOrNull { it.name.contains(id) }?.let { return it }
+        return gb.firstOrNull()
     }
 
     /** English voices installed on this phone, best quality first. */
@@ -63,8 +88,21 @@ class Speaker(context: Context, private val prefs: Prefs) {
             .sortedWith(compareByDescending<Voice> { it.quality }.thenBy { it.locale.toString() }.thenBy { it.name })
     }.getOrDefault(emptyList())
 
-    fun speak(text: String, l: Listener) {
-        if (!ready) { pending = text to l; return }
+    /** Says [text]: the laptop's recording [speech] when there is one, else a bundled clip, else text-to-speech. */
+    fun speak(text: String, l: Listener, speech: Speech? = null) {
+        stop()
+        if (jarvisVoice) {
+            if (speech != null && speech.file.exists() && play(text, l) { it.setDataSource(speech.file.absolutePath); speech.wordsMs }) return
+            VoiceClips.forText(clean(text))?.let { clip ->
+                if (play(text, l) { mp -> ctx.resources.openRawResourceFd(clip.res).use { mp.setDataSource(it.fileDescriptor, it.startOffset, it.length) }; clip.words }) return
+            }
+        }
+        speakTts(text, l)
+    }
+
+    /** The phone's own text-to-speech. */
+    private fun speakTts(text: String, l: Listener) {
+        if (!ready) { listener = l; pending = text to l; return }
         listener = l
         val chunks = chunk(clean(text))
         if (chunks.isEmpty()) { finish(); return }
@@ -76,9 +114,55 @@ class Speaker(context: Context, private val prefs: Prefs) {
         }
     }
 
+    /**
+     * Plays a recording of [text]; [load] sets the source and returns when each word starts (ms).
+     * False if it can't start. If it breaks while playing, the phone's own voice says [text] instead.
+     */
+    private fun play(text: String, l: Listener, load: (MediaPlayer) -> IntArray): Boolean {
+        val mp = MediaPlayer()
+        val words: IntArray
+        try {
+            mp.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            words = load(mp)
+            mp.prepare()
+            val speed = prefs.speechRate / 100f
+            if (speed != 1f) runCatching { mp.playbackParams = mp.playbackParams.setSpeed(speed) }
+        } catch (e: Exception) {
+            mp.release()
+            return false
+        }
+        listener = l
+        player = mp
+        mp.setOnCompletionListener { if (player === mp) { release(); finish() } }
+        mp.setOnErrorListener { _, _, _ -> if (player === mp) { release(); speakTts(text, l) }; true }
+        mp.start()
+        // Blink on each word, following the playback position (so a slow start stays in sync).
+        var next = 0
+        val t = object : Runnable {
+            override fun run() {
+                if (player !== mp) return
+                val pos = runCatching { mp.currentPosition }.getOrDefault(0)
+                while (next < words.size && pos >= words[next]) { next++; listener?.onWord() }
+                main.postDelayed(this, 30)
+            }
+        }
+        tick = t
+        main.post(t)
+        return true
+    }
+
+    private fun release() {
+        tick?.let { main.removeCallbacks(it) }
+        tick = null
+        player?.let { p -> runCatching { p.stop() }; p.release() }
+        player = null
+    }
+
     fun stop() {
         listener = null
         lastId = ""
+        pending = null
+        release()
         if (ready) tts.stop()
     }
 

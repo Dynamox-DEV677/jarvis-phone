@@ -1,5 +1,6 @@
 package dev.kairo.jarvis
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Matrix
@@ -86,7 +87,7 @@ class HeroView(context: Context) : View(context) {
         val dt = if (lastFrame == 0L) 0.016f else ((now - lastFrame) / 1000f).coerceIn(0f, 0.05f)
         lastFrame = now
         val target = when (mood) { 2 -> 1f; 1 -> 0.6f; else -> 0.25f }
-        energy += (target - energy) * (1f - exp(-dt * 3f))
+        energy = if (ValueAnimator.areAnimatorsEnabled()) energy + (target - energy) * (1f - exp(-dt * 3f)) else target
         spin = (spin + dt * (8f + 70f * energy)) % 360f
         val e = energy
         val cx = width / 2f
@@ -121,6 +122,10 @@ class HeroView(context: Context) : View(context) {
         core.alpha = (110 + 145 * e).toInt()
         canvas.drawCircle(cx, cy, r * 0.3f * pulse, core)
 
-        if (animating) postInvalidateOnAnimation() else lastFrame = 0L
+        // Smooth while JARVIS is on; 30 frames a second is plenty for the slow idle turn and saves battery.
+        // Holds still when "Remove animations" is on in Android's settings.
+        if (!animating || !ValueAnimator.areAnimatorsEnabled()) lastFrame = 0L
+        else if (mood == 2) postInvalidateOnAnimation()
+        else postInvalidateDelayed(33)
     }
 }

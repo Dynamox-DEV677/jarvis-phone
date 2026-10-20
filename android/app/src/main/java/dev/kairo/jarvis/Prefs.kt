@@ -7,6 +7,11 @@ import android.content.SharedPreferences
 class Prefs(context: Context) {
     private val p: SharedPreferences = context.getSharedPreferences("jarvis", Context.MODE_PRIVATE)
 
+    init {
+        // 1.3.0 brought the real JARVIS voice: switch everyone to it once (they can pick a phone voice again).
+        if (p.getInt("voiceVersion", 0) < 1) p.edit().putString("voice", "").remove("rate").putInt("voiceVersion", 1).apply()
+    }
+
     var brainAddress: String
         get() = p.getString("brain", DEFAULT_BRAIN) ?: DEFAULT_BRAIN
         set(v) = p.edit().putString("brain", v.trim().ifEmpty { DEFAULT_BRAIN }).apply()
@@ -52,13 +57,14 @@ class Prefs(context: Context) {
         get() = p.getString("lang", "en-IN") ?: "en-IN"
         set(v) = p.edit().putString("lang", v.trim().ifEmpty { "en-IN" }).apply()
 
+    /** "" = the JARVIS voice (recorded by the laptop); otherwise one of the phone's own voices. */
     var voiceName: String
         get() = p.getString("voice", "") ?: ""
         set(v) = p.edit().putString("voice", v).apply()
 
     /** Speech rate ×100 (100 = normal). */
     var speechRate: Int
-        get() = p.getInt("rate", 105)
+        get() = p.getInt("rate", 100)
         set(v) = p.edit().putInt("rate", v.coerceIn(50, 200)).apply()
 
     /** Where the orb sits on the right edge, as a fraction of the screen height. */

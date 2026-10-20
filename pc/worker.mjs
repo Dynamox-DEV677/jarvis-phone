@@ -14,16 +14,19 @@
  * The secret that links phone and laptop lives in %USERPROFILE%\.jarvis-phone\relay.json and in
  * the app. Anyone who has it can give this laptop tasks, so treat it like a password.
  */
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createInterface } from 'node:readline'
 import readline from 'node:readline/promises'
+import { fileURLToPath } from 'node:url'
 import { Agy } from '../brain/agy.mjs'
 import { captureScreen, previewOf } from './screen.mjs'
 
-const VERSION = '1.1.0'
+const VERSION = '1.3.0'
+const HERE = path.dirname(fileURLToPath(import.meta.url))
 const HOME = os.homedir()
 const CONF_DIR = path.join(HOME, '.jarvis-phone')
 const CONF_FILE = path.join(CONF_DIR, 'relay.json')
@@ -153,10 +156,101 @@ async function encode(file) {
   return { mime: 'image/jpeg', name: path.basename(file), data: data.toString('base64') }
 }
 
+/** jarvis_update refuses outputs over 3 MB: drop the oldest screenshots, then the voice. */
+function fit(out) {
+  const size = () => JSON.stringify(out).length
+  while (size() > 2_900_000 && out.images?.length) out.images.shift()
+  if (size() > 2_900_000) delete out.voice
+  return out
+}
+
+/* ── voice ────────────────────────────────────────────────────────────────── */
+
+/** The same clean-up the phone does before speaking: no markdown, no raw links. */
+const speakable = (s) => String(s)
+  .replace(/```[\s\S]*?```/g, ' ')
+  .replace(/\[([^\]]+)]\([^)]+\)/g, '$1')
+  .replace(/https?:\/\/\S+/g, 'a link')
+  .replace(/[*_#`>|~]/g, '')
+  .replace(/^\s*[-•]\s+/gm, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+/**
+ * JARVIS's voice for the phone. pc/tts.py turns each reply into speech with Microsoft's free
+ * neural voices (British "Ryan" by default) and says when every word starts, so the glow on the
+ * phone blinks in time. If it fails, the phone simply uses its own voice.
+ */
+class Voice {
+  constructor(conf) {
+    this.voice = conf.voice ?? 'en-GB-RyanNeural' // "" turns it off
+    this.rate = conf.voiceRate || '+0%'
+    this.pitch = conf.voicePitch || '+0Hz'
+    this.python = conf.python || 'python'
+    this.proc = null
+    this.waiting = new Map()
+    this.seq = 0
+    this.cache = new Map()
+    this.warned = false
+    this.missing = false
+  }
+
+  start() {
+    const p = spawn(this.python, [path.join(HERE, 'tts.py')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    this.proc = p
+    let err = ''
+    createInterface({ input: p.stdout }).on('line', (line) => {
+      let j
+      try { j = JSON.parse(line) } catch { return }
+      const done = this.waiting.get(j.id)
+      if (done) { this.waiting.delete(j.id); done(j) }
+    })
+    p.stderr.on('data', (d) => { err = (err + d).slice(-2000) })
+    p.stdin.on('error', () => {})
+    const gone = (why) => {
+      if (this.proc === p) this.proc = null
+      for (const done of this.waiting.values()) done({ error: why })
+      this.waiting.clear()
+    }
+    p.on('error', (e) => { if (e.code === 'ENOENT') this.missing = true; gone(e.message) })
+    p.on('exit', (code) => gone(err.trim().split('\n').pop() || `the voice helper stopped (${code})`))
+  }
+
+  /** { mime, data (base64 mp3), words (ms) } or null. */
+  async speak(text) {
+    const t = speakable(text)
+    if (!this.voice || this.missing || !t) return null
+    if (this.cache.has(t)) return this.cache.get(t)
+    if (!this.proc) this.start()
+    const id = ++this.seq
+    const ans = await new Promise((resolve) => {
+      this.waiting.set(id, resolve)
+      setTimeout(() => { if (this.waiting.delete(id)) resolve({ error: 'timed out' }) }, 25_000)
+      this.proc.stdin.write(JSON.stringify({ id, text: t, voice: this.voice, rate: this.rate, pitch: this.pitch }) + '\n')
+    })
+    if (ans.error) {
+      if (!this.warned) log(`voice: ${ans.error}\n  The phone will use its own voice. To fix: python -m pip install --user --upgrade edge-tts`)
+      this.warned = true
+      return null
+    }
+    if (this.warned) log('voice: working again')
+    this.warned = false
+    const v = { mime: 'audio/mpeg', data: ans.audio, words: ans.words }
+    if (t.length <= 80) {
+      this.cache.set(t, v)
+      if (this.cache.size > 30) this.cache.delete(this.cache.keys().next().value)
+    }
+    return v
+  }
+
+  stop() { try { this.proc?.kill() } catch {} }
+}
+
 class Worker {
   constructor(conf) {
     this.conf = conf
     this.room = roomOf(conf.secret)
+    this.voice = new Voice(conf)
     this.agy = new Agy({ bin: conf.agy || path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'agy', 'bin', 'agy.exe'), agent: conf.agent || 'jarvis', model: conf.model || undefined, cwd: SCRATCH, log })
     this.draining = false
     this.again = false
@@ -175,9 +269,9 @@ class Worker {
     try {
       if (job.kind === 'screenshot') {
         await this.update(job.id, 'working', 'Taking a screenshot…')
-        const shot = await captureScreen(MY_SHOTS)
-        const img = await encode(shot.preview)
-        await this.update(job.id, 'done', null, { text: "Here's your laptop screen.", images: img ? [img] : [] })
+        const text = "Here's your laptop screen."
+        const [img, voice] = await Promise.all([captureScreen(MY_SHOTS).then((shot) => encode(shot.preview)), this.voice.speak(text)])
+        await this.update(job.id, 'done', null, fit({ text, images: img ? [img] : [], voice }))
       } else if (job.kind === 'reset') {
         this.agy.stop()
         await this.update(job.id, 'done', null, { text: 'Starting a new conversation.' })
@@ -190,9 +284,13 @@ class Worker {
           log('  tool', ev.name)
           this.update(job.id, 'working', label(ev.name))
         })
-        const images = (await Promise.all(imagesSince(t0 - 1000).map((f) => encode(f).catch(() => null)))).filter(Boolean)
-        log(`  done${images.length ? ` (+${images.length} screenshot${images.length > 1 ? 's' : ''})` : ''}: ${reply.slice(0, 120)}`)
-        await this.update(job.id, 'done', null, { text: reply || 'Done.', images })
+        const text = reply || 'Done.'
+        const [images, voice] = await Promise.all([
+          Promise.all(imagesSince(t0 - 1000).map((f) => encode(f).catch(() => null))).then((a) => a.filter(Boolean)),
+          this.voice.speak(text),
+        ])
+        log(`  done${images.length ? ` (+${images.length} screenshot${images.length > 1 ? 's' : ''})` : ''}${voice ? '' : ' (no voice)'}: ${reply.slice(0, 120)}`)
+        await this.update(job.id, 'done', null, fit({ text, images, voice }))
       }
     } catch (e) {
       log('  failed:', e.message)
@@ -280,7 +378,7 @@ try {
     const c = readConf()
     if (!c) { console.log('Not set up yet. Run SETUP-JARVIS-LAPTOP.cmd first.'); process.exit(1) }
     const w = new Worker(c)
-    process.on('SIGINT', () => { w.agy.stop(); process.exit(0) })
+    process.on('SIGINT', () => { w.agy.stop(); w.voice.stop(); process.exit(0) })
     await w.start()
   } else { console.log('Usage: node worker.mjs [setup|pair]'); process.exit(1) }
 } catch (e) {
