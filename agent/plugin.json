@@ -1,0 +1,11 @@
+{
+  "name": "jarvis-phone",
+  "displayName": "JARVIS (phone)",
+  "version": "1.0.0",
+  "description": "JARVIS as a voice assistant on an Android phone: web search, phone controls through Termux, and the paired PC through the JARVIS PC bridge.",
+  "author": {
+    "name": "Kairo Industries"
+  },
+  "license": "MIT",
+  "keywords": ["jarvis", "voice", "android", "termux"]
+}

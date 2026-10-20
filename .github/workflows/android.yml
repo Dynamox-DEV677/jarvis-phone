@@ -1,0 +1,59 @@
+name: Android app
+
+# Builds the signed JARVIS app. A version tag (v1.0.0) also publishes it as a GitHub release,
+# which is what `jarvis app` in Termux downloads.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK parts
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0" > /dev/null
+
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.JARVIS_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "::error::The JARVIS_KEYSTORE_B64 secret is missing"; exit 1; fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/jarvis.jks"
+
+      - name: Build
+        working-directory: android
+        env:
+          JARVIS_KEYSTORE: ${{ runner.temp }}/jarvis.jks
+          JARVIS_KEYSTORE_PASSWORD: ${{ secrets.JARVIS_KEYSTORE_PASSWORD }}
+          JARVIS_KEY_ALIAS: jarvis
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --console=plain
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/jarvis.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-apk
+          path: jarvis.apk
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp jarvis.apk "jarvis-${GITHUB_REF_NAME}.apk"
+          gh release create "$GITHUB_REF_NAME" "jarvis-${GITHUB_REF_NAME}.apk" \
+            --title "JARVIS $GITHUB_REF_NAME" \
+            --notes "Install it from Termux with: jarvis app" \
+            || gh release upload "$GITHUB_REF_NAME" "jarvis-${GITHUB_REF_NAME}.apk" --clobber

@@ -1,0 +1,59 @@
+package dev.kairo.jarvis
+
+import android.content.Context
+import android.content.SharedPreferences
+
+/** Everything the user sets in the app, kept on this phone only. */
+class Prefs(context: Context) {
+    private val p: SharedPreferences = context.getSharedPreferences("jarvis", Context.MODE_PRIVATE)
+
+    var brainAddress: String
+        get() = p.getString("brain", DEFAULT_BRAIN) ?: DEFAULT_BRAIN
+        set(v) = p.edit().putString("brain", v.trim().ifEmpty { DEFAULT_BRAIN }).apply()
+
+    var token: String
+        get() = p.getString("token", "") ?: ""
+        set(v) = p.edit().putString("token", v.trim()).apply()
+
+    var orb: Boolean
+        get() = p.getBoolean("orb", true)
+        set(v) = p.edit().putBoolean("orb", v).apply()
+
+    var wakeWord: Boolean
+        get() = p.getBoolean("wake", false)
+        set(v) = p.edit().putBoolean("wake", v).apply()
+
+    var followUp: Boolean
+        get() = p.getBoolean("followUp", true)
+        set(v) = p.edit().putBoolean("followUp", v).apply()
+
+    var captions: Boolean
+        get() = p.getBoolean("captions", true)
+        set(v) = p.edit().putBoolean("captions", v).apply()
+
+    var language: String
+        get() = p.getString("lang", "en-IN") ?: "en-IN"
+        set(v) = p.edit().putString("lang", v.trim().ifEmpty { "en-IN" }).apply()
+
+    var voiceName: String
+        get() = p.getString("voice", "") ?: ""
+        set(v) = p.edit().putString("voice", v).apply()
+
+    /** Speech rate ×100 (100 = normal). */
+    var speechRate: Int
+        get() = p.getInt("rate", 105)
+        set(v) = p.edit().putInt("rate", v.coerceIn(50, 200)).apply()
+
+    /** Where the orb sits on the right edge, as a fraction of the screen height. */
+    var orbY: Float
+        get() = p.getFloat("orbY", 0.42f)
+        set(v) = p.edit().putFloat("orbY", v.coerceIn(0.05f, 0.9f)).apply()
+
+    var running: Boolean
+        get() = p.getBoolean("running", false)
+        set(v) = p.edit().putBoolean("running", v).apply()
+
+    companion object {
+        const val DEFAULT_BRAIN = "127.0.0.1:8765"
+    }
+}

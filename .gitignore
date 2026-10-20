@@ -1,0 +1,22 @@
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+*.iml
+captures/
+
+# Secrets and personal files never belong here
+*.jks
+*.keystore
+signing.properties
+.env
+pc.json
+config.json
+
+# Termux side (the downloaded APK)
+/app/
+node_modules/
+*.log
