@@ -37,6 +37,14 @@ if ! command -v agy >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+# The installer runs in its own shell, so the PATH line above only helps NEW Termux windows.
+# A link in Termux's own bin folder makes `agy` work straight away, in this window too.
+if [ -x "$HOME/.local/bin/agy" ]; then
+  ln -sf "$HOME/.local/bin/agy" "$PREFIX/bin/agy"
+else
+  echo "The Antigravity CLI didn't install. Check your internet, then run the installer again."
+  exit 1
+fi
 
 say "Setting up JARVIS"
 # Lets the JARVIS app start the brain for you (only apps you grant the permission to can use this).
