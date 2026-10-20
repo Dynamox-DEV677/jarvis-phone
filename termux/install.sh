@@ -37,6 +37,9 @@ if ! command -v agy >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+# Lets agy open its Google sign-in page in the phone's browser (needs the Termux:API app).
+grep -q 'BROWSER=termux-open-url' "$HOME/.bashrc" 2>/dev/null || echo 'export BROWSER=termux-open-url' >> "$HOME/.bashrc"
+export BROWSER=termux-open-url
 # The installer runs in its own shell, so the PATH line above only helps NEW Termux windows.
 # A link in Termux's own bin folder makes `agy` work straight away, in this window too.
 if [ -x "$HOME/.local/bin/agy" ]; then
@@ -78,7 +81,9 @@ ${ORANGE}JARVIS is installed.${OFF} Four steps left:
 
   1. Sign in to agy with your Google account (the one with Google AI Pro):
        ${ORANGE}agy${OFF}
-     Follow the link it shows, sign in, then type /exit.
+     The sign-in page opens in your browser. If it doesn't: long-press the
+     screen, tap More > Select URL, copy the link and open it in Chrome.
+     Sign in, then type /exit.
 
   2. Start the brain:
        ${ORANGE}jarvis start${OFF}
