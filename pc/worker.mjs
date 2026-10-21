@@ -16,7 +16,7 @@
  */
 import { execFile, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
@@ -30,6 +30,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const HOME = os.homedir()
 const CONF_DIR = path.join(HOME, '.jarvis-phone')
 const CONF_FILE = path.join(CONF_DIR, 'relay.json')
+const HANDS_STOP = path.join(CONF_DIR, 'hands.stop') // Ctrl+Alt+J at the laptop: JARVIS's hands stop
 const SCRATCH = path.join(HOME, '.gemini', 'antigravity', 'scratch')
 const SHOT_DIRS = ['screenshots', 'browser', path.join('phone', 'screenshots')].map((d) => path.join(SCRATCH, 'JARVIS', d))
 const MY_SHOTS = path.join(SCRATCH, 'JARVIS', 'phone', 'screenshots')
@@ -124,6 +125,7 @@ async function pair(conf) {
 
 const REMOTE_NOTE = 'This request came from my phone through JARVIS, maybe from outside home. Keep the answer short and plain, with no markdown: it will be read aloud on the phone. ' +
   'Any screenshot you take is sent to the phone automatically, so take one when it helps show what happened. ' +
+  'Nobody is at the laptop to approve a permission prompt: to use apps on the laptop (Claude included), use your desktop_* and claude_desktop tools. ' +
   'In this run do not delete, uninstall, or change system settings; if the task needs that, stop and say what you would do instead.\n\nRequest: '
 
 const LABELS = [
@@ -137,6 +139,13 @@ const LABELS = [
   [/kyno/, 'Checking Kyno…'],
   [/^(open|pc_open)$/, 'Opening it on the laptop…'],
   [/^pc_status$/, 'Checking the laptop…'],
+  [/^claude_desktop$/, 'Typing into Claude…'],
+  [/^desktop_(windows|read)$/, 'Looking at the screen…'],
+  [/^desktop_focus$/, 'Switching windows…'],
+  [/^desktop_click$/, 'Clicking…'],
+  [/^desktop_type$/, 'Typing…'],
+  [/^desktop_keys$/, 'Pressing keys…'],
+  [/^desktop_scroll$/, 'Scrolling…'],
 ]
 const label = (name) => (LABELS.find(([re]) => re.test(name)) || [null, 'Working…'])[1]
 
@@ -255,6 +264,7 @@ class Voice {
 
 const DESK_NOTE = 'I am talking to you out loud at the laptop, through JARVIS on the desktop. Answer in one to three short spoken sentences, ' +
   'with no markdown, lists or links: your answer is read aloud. ' +
+  'I can\'t click permission prompts while talking: to use apps on the laptop (Claude included), use your desktop_* and claude_desktop tools. ' +
   'In this run do not delete, uninstall, or change system settings; if the task needs that, stop and say what you would do instead.\n\nRequest: '
 
 /**
@@ -363,6 +373,7 @@ class Worker {
   /** Asks JARVIS (agy), starting it if needed or if it's been quiet for 30 minutes (a fresh conversation). */
   think(prompt, onTool) {
     return this.exclusive(() => {
+      try { unlinkSync(HANDS_STOP) } catch {} // a new request: JARVIS may use its hands again (pc/hands.py)
       const idle = this.agy.lastUsed && Date.now() - this.agy.lastUsed > 30 * 60_000
       if (!this.agy.running || idle) this.agy.start()
       return this.agy.ask(prompt, (ev) => { log('  tool', ev.name); onTool(ev.name) })

@@ -12,7 +12,7 @@ const TURN_TIMEOUT_MS = 20 * 60_000
 /** MCP tools arrive as the generic "call_mcp_tool" (or "mcp_<plugin>_<server>_<tool>"); find the real name. */
 export function toolName(s) {
   const p = s.tool_info?.parameters || {}
-  return String(p.ToolName || p.tool_name || s.tool_name || '').replace(/^mcp_[a-z0-9-]+_[a-z0-9-]+?_(?=(pc_|claude_code))/i, '') || 'tool'
+  return String(p.ToolName || p.tool_name || s.tool_name || '').replace(/^mcp_[a-z0-9-]+_[a-z0-9-]+?_(?=(pc_|claude_code|claude_desktop|desktop_))/i, '') || 'tool'
 }
 
 export class Agy {

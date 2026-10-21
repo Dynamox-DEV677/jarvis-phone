@@ -56,6 +56,18 @@ You only need the JARVIS app on the phone: no Termux and no `agy` sign-in there.
 - To turn it off, add `"desktop": false` to `relay.json`.
 - To see the light without talking: `python pc\desktop.py --demo`.
 
+**JARVIS's hands: using the laptop's apps.** `pc/hands.py` gives JARVIS tools to work desktop apps the way you do:
+- `desktop_windows` and `desktop_focus` find and switch windows;
+- `desktop_read` lists a window's buttons, text boxes and tabs with their positions, through Windows UI Automation;
+- `desktop_click`, `desktop_type`, `desktop_keys` (including media keys) and `desktop_scroll` act on them;
+- `claude_desktop` types a prompt into the Claude app and sends it, optionally after opening one of your sessions by name or starting a new one.
+
+So "Hey Jarvis, tell Claude Code in my lantern session to fix the build" works, from the laptop or from your phone.
+- **You stay in charge:** press **Ctrl+Alt+J**, or shove the mouse into the top-left corner of the screen. JARVIS's hands then refuse everything for two minutes, or until you ask something new.
+- To set it up, add `"hands": {"command": "python", "args": ["C:/Users/<you>/jarvis-phone/pc/hands.py"]}` to your JARVIS plugin's `mcp_config.json`.
+- Then allow `mcp(jarvis_hands/*)` in `~/.gemini/antigravity-cli/settings.json`.
+- It needs `python -m pip install --user uiautomation`.
+
 **JARVIS's voice:** the laptop records every reply in a British neural voice (Microsoft's free "Ryan" voice, through [edge-tts](https://github.com/rany2/edge-tts)) and sends it with the answer. The orange glow blinks on each word. For this you need [Python](https://www.python.org) on the laptop; `START-JARVIS-LAPTOP` installs and updates edge-tts by itself. Without it, the phone uses its own voice. To change the voice, add `"voice": "en-GB-ThomasNeural"` to `relay.json`. List the voices with `python -m edge_tts --list-voices`. `""` turns it off. In the app, **Voice** lets you pick one of the phone's voices instead.
 
 **Keep the laptop awake:** in Windows Settings → System → Power, set sleep to *Never* while plugged in, and closing the lid to *Do nothing*. A sleeping laptop can't answer.

@@ -41,6 +41,7 @@ WAKE_MODEL = "vosk-model-small-en-in-0.4"  # small, offline, and it knows the wo
 WAKE_URL = f"https://alphacephei.com/vosk/models/{WAKE_MODEL}.zip"
 WHISPER = "base.en"
 RATE = 16000
+HANDS_STOP = os.path.join(HOME, ".jarvis-phone", "hands.stop")  # see pc/hands.py
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "nothing", "shut up", "be quiet", "that's all", "thats all", "thank you", "thanks"}
 
 
@@ -725,13 +726,22 @@ class Jarvis:
             emit("ready")
 
     def activate(self, source):
-        """The wake word or the hotkey: talk if idle, otherwise stop."""
+        """The wake word or the hotkey: talk if idle, otherwise stop - JARVIS's hands too (pc/hands.py)."""
         if self.state == "idle":
             self.listen()
         elif source == "hotkey":
+            try:
+                open(HANDS_STOP, "w").close()
+            except OSError:
+                pass
+            ui(lambda: self.glow.caption("JARVIS", "Stopped."))
             self.finish()
 
     def listen(self):
+        try:
+            os.remove(HANDS_STOP)  # a new request: JARVIS may use its hands again
+        except OSError:
+            pass
         self.turn += 1
         my = self.turn
         self.state = "listening"
