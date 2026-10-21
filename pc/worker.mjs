@@ -16,7 +16,7 @@
  */
 import { execFile, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { Agy } from '../brain/agy.mjs'
 import { captureScreen, previewOf } from './screen.mjs'
 
-const VERSION = '1.3.0'
+const VERSION = '1.4.0'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const HOME = os.homedir()
 const CONF_DIR = path.join(HOME, '.jarvis-phone')
@@ -36,7 +36,12 @@ const MY_SHOTS = path.join(SCRATCH, 'JARVIS', 'phone', 'screenshots')
 const MAX_IMAGES = 3
 
 const stamp = () => new Date().toTimeString().slice(0, 8)
-const log = (...a) => console.log(`[${stamp()}]`, ...a)
+const LOG_FILE = path.join(CONF_DIR, 'worker.log')
+const log = (...a) => {
+  const line = `[${stamp()}] ${a.join(' ')}`
+  console.log(line)
+  try { appendFileSync(LOG_FILE, line + '\n') } catch {}
+}
 
 /* ── config ───────────────────────────────────────────────────────────────── */
 
@@ -246,11 +251,66 @@ class Voice {
   stop() { try { this.proc?.kill() } catch {} }
 }
 
+/* ── JARVIS at the laptop ─────────────────────────────────────────────────── */
+
+const DESK_NOTE = 'I am talking to you out loud at the laptop, through JARVIS on the desktop. Answer in one to three short spoken sentences, ' +
+  'with no markdown, lists or links: your answer is read aloud. ' +
+  'In this run do not delete, uninstall, or change system settings; if the task needs that, stop and say what you would do instead.\n\nRequest: '
+
+/**
+ * "Hey Jarvis" on the laptop. pc/desktop.py listens for the wake word, shows the orange glow and
+ * speaks; this side does the thinking, with the same JARVIS (and conversation) as the phone.
+ */
+class Desktop {
+  constructor(conf, onAsk) {
+    this.enabled = conf.desktop !== false // "desktop": false in relay.json turns it off
+    this.python = conf.python || 'python'
+    this.voice = conf.voice || 'en-GB-RyanNeural'
+    this.onAsk = onAsk
+    this.proc = null
+    this.restarts = 0
+  }
+
+  start() {
+    if (!this.enabled) return
+    const p = spawn(this.python, [path.join(HERE, 'desktop.py'), '--voice', this.voice], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    this.proc = p
+    let err = ''
+    p.stderr.on('data', (d) => { err = (err + d).slice(-3000) })
+    p.stdin.on('error', () => {})
+    createInterface({ input: p.stdout }).on('line', (line) => {
+      let m
+      try { m = JSON.parse(line) } catch { return }
+      if (m.event === 'ready') { this.restarts = 0; log('desktop: say "Hey Jarvis" or press Ctrl+Alt+J') }
+      else if (m.event === 'log') log('desktop:', m.text)
+      else if (m.event === 'ask') { log(`desktop asks: ${String(m.text).slice(0, 120)}`); this.onAsk(m.id, m.text) }
+    })
+    p.on('error', (e) => log(`desktop: can't start Python (${e.message}). Install Python from python.org for "Hey Jarvis" on the laptop.`))
+    p.on('exit', (code) => {
+      if (this.proc !== p) return
+      this.proc = null
+      const why = err.trim().split('\n').pop() || `exit ${code}`
+      if (/ModuleNotFoundError|No module named/.test(why)) {
+        log(`desktop: ${why}\n  Fix: python -m pip install --user vosk sounddevice faster-whisper pillow edge-tts`)
+      } else if (this.restarts++ < 5) {
+        log(`desktop stopped (${why}) - restarting`)
+        setTimeout(() => this.start(), 5000 * this.restarts)
+      } else log(`desktop stopped (${why}) - giving up; restart JARVIS to try again`)
+    })
+  }
+
+  send(msg) { try { this.proc?.stdin.write(JSON.stringify(msg) + '\n') } catch {} }
+
+  stop() { try { this.proc?.kill() } catch {} this.proc = null }
+}
+
 class Worker {
   constructor(conf) {
     this.conf = conf
     this.room = roomOf(conf.secret)
     this.voice = new Voice(conf)
+    this.desktop = new Desktop(conf, (id, text) => this.deskAsk(id, text))
+    this.lock = Promise.resolve() // one question at a time to agy, from the phone or the laptop
     this.agy = new Agy({ bin: conf.agy || path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'agy', 'bin', 'agy.exe'), agent: conf.agent || 'jarvis', model: conf.model || undefined, cwd: SCRATCH, log })
     this.draining = false
     this.again = false
@@ -273,17 +333,12 @@ class Worker {
         const [img, voice] = await Promise.all([captureScreen(MY_SHOTS).then((shot) => encode(shot.preview)), this.voice.speak(text)])
         await this.update(job.id, 'done', null, fit({ text, images: img ? [img] : [], voice }))
       } else if (job.kind === 'reset') {
-        this.agy.stop()
+        await this.exclusive(() => this.agy.stop())
         await this.update(job.id, 'done', null, { text: 'Starting a new conversation.' })
       } else {
-        const idle = this.agy.lastUsed && Date.now() - this.agy.lastUsed > 30 * 60_000
-        if (!this.agy.running || idle) this.agy.start()
         const t0 = Date.now()
         await this.update(job.id, 'working', 'Thinking…')
-        const reply = await this.agy.ask(REMOTE_NOTE + job.input, (ev) => {
-          log('  tool', ev.name)
-          this.update(job.id, 'working', label(ev.name))
-        })
+        const reply = await this.think(REMOTE_NOTE + job.input, (name) => this.update(job.id, 'working', label(name)))
         const text = reply || 'Done.'
         const [images, voice] = await Promise.all([
           Promise.all(imagesSince(t0 - 1000).map((f) => encode(f).catch(() => null))).then((a) => a.filter(Boolean)),
@@ -296,6 +351,35 @@ class Worker {
       log('  failed:', e.message)
       await this.update(job.id, 'error', e.message)
     }
+  }
+
+  /** Runs fn when agy is free: the phone and the laptop take turns with the one JARVIS. */
+  exclusive(fn) {
+    const run = this.lock.then(fn)
+    this.lock = run.catch(() => {})
+    return run
+  }
+
+  /** Asks JARVIS (agy), starting it if needed or if it's been quiet for 30 minutes (a fresh conversation). */
+  think(prompt, onTool) {
+    return this.exclusive(() => {
+      const idle = this.agy.lastUsed && Date.now() - this.agy.lastUsed > 30 * 60_000
+      if (!this.agy.running || idle) this.agy.start()
+      return this.agy.ask(prompt, (ev) => { log('  tool', ev.name); onTool(ev.name) })
+    })
+  }
+
+  /** "Hey Jarvis" at the laptop: think, and send the answer back to be spoken. */
+  async deskAsk(id, text) {
+    let reply
+    try {
+      reply = (await this.think(DESK_NOTE + text, (name) => this.desktop.send({ cmd: 'status', text: label(name) }))) || 'Done.'
+      log(`  desktop answer: ${reply.slice(0, 120)}`)
+    } catch (e) {
+      log('  desktop failed:', e.message)
+      reply = "Sorry, I couldn't do that just now."
+    }
+    this.desktop.send({ cmd: 'reply', id, text: reply })
   }
 
   /** Take jobs until none are waiting. A poke while busy makes it look again afterwards. */
@@ -357,9 +441,11 @@ class Worker {
   }
 
   async start() {
+    try { if (statSync(LOG_FILE).size > 1_000_000) writeFileSync(LOG_FILE, '') } catch {}
     await this.beat()
     log(`JARVIS laptop worker ${VERSION} is running on ${os.hostname()}. Keep this window open.`)
     this.agy.start() // warm up, so the first question doesn't wait for agy to start
+    this.desktop.start()
     if (typeof WebSocket === 'function') this.connect()
     setInterval(() => this.beat(), 20_000)
     // Safety net: look for jobs even without Realtime (often when it's down, rarely when it's up).
@@ -378,7 +464,7 @@ try {
     const c = readConf()
     if (!c) { console.log('Not set up yet. Run SETUP-JARVIS-LAPTOP.cmd first.'); process.exit(1) }
     const w = new Worker(c)
-    process.on('SIGINT', () => { w.agy.stop(); w.voice.stop(); process.exit(0) })
+    process.on('SIGINT', () => { w.agy.stop(); w.voice.stop(); w.desktop.stop(); process.exit(0) })
     await w.start()
   } else { console.log('Usage: node worker.mjs [setup|pair]'); process.exit(1) }
 } catch (e) {
