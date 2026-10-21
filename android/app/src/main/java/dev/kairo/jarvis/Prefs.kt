@@ -72,6 +72,11 @@ class Prefs(context: Context) {
         get() = p.getFloat("orbY", 0.42f)
         set(v) = p.edit().putFloat("orbY", v.coerceIn(0.05f, 0.9f)).apply()
 
+    /** Live control picture: "saver", "balanced" or "sharp". */
+    var liveQuality: String
+        get() = p.getString("liveQuality", "balanced") ?: "balanced"
+        set(v) = p.edit().putString("liveQuality", v).apply()
+
     var running: Boolean
         get() = p.getBoolean("running", false)
         set(v) = p.edit().putBoolean("running", v).apply()

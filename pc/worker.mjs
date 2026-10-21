@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { Agy } from '../brain/agy.mjs'
 import { captureScreen, previewOf } from './screen.mjs'
 
-const VERSION = '1.4.0'
+const VERSION = '1.5.0'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const HOME = os.homedir()
 const CONF_DIR = path.join(HOME, '.jarvis-phone')
@@ -272,11 +272,12 @@ const DESK_NOTE = 'I am talking to you out loud at the laptop, through JARVIS on
  * speaks; this side does the thinking, with the same JARVIS (and conversation) as the phone.
  */
 class Desktop {
-  constructor(conf, onAsk) {
+  constructor(conf, onAsk, onLiveStop) {
     this.enabled = conf.desktop !== false // "desktop": false in relay.json turns it off
     this.python = conf.python || 'python'
     this.voice = conf.voice || 'en-GB-RyanNeural'
     this.onAsk = onAsk
+    this.onLiveStop = onLiveStop
     this.proc = null
     this.restarts = 0
   }
@@ -294,6 +295,7 @@ class Desktop {
       if (m.event === 'ready') { this.restarts = 0; log('desktop: say "Hey Jarvis" or press Ctrl+Alt+J') }
       else if (m.event === 'log') log('desktop:', m.text)
       else if (m.event === 'ask') { log(`desktop asks: ${String(m.text).slice(0, 120)}`); this.onAsk(m.id, m.text) }
+      else if (m.event === 'live_stop') this.onLiveStop()
     })
     p.on('error', (e) => log(`desktop: can't start Python (${e.message}). Install Python from python.org for "Hey Jarvis" on the laptop.`))
     p.on('exit', (code) => {
@@ -314,12 +316,171 @@ class Desktop {
   stop() { try { this.proc?.kill() } catch {} this.proc = null }
 }
 
+/* ── live control from the phone ──────────────────────────────────────────── */
+
+// Live frames count against the Supabase free plan's 5 GB a month, which the relay needs too.
+const LIVE_CAP = 3 * 1024 ** 3
+const USAGE_FILE = path.join(CONF_DIR, 'live-usage.json')
+
+/** The live channel's name and key, both made from the pairing secret (the phone does the same). */
+function liveKeys(secret) {
+  return {
+    topic: 'realtime:jarvis-live-' + crypto.createHash('sha256').update('jarvis-live:' + secret).digest('hex').slice(0, 32),
+    key: crypto.createHash('sha256').update('jarvis-live-key:' + secret).digest(),
+  }
+}
+
+/** AES-256-GCM: base64(iv | ciphertext | tag). The direction is bound in, so a message can't be bounced back. */
+function seal(key, direction, plain) {
+  const iv = crypto.randomBytes(12)
+  const c = crypto.createCipheriv('aes-256-gcm', key, iv)
+  c.setAAD(Buffer.from(direction))
+  const body = Buffer.concat([c.update(plain), c.final()])
+  return Buffer.concat([iv, body, c.getAuthTag()]).toString('base64')
+}
+
+function unseal(key, direction, b64) {
+  const b = Buffer.from(String(b64 || ''), 'base64')
+  if (b.length < 29) throw new Error('too short')
+  const d = crypto.createDecipheriv('aes-256-gcm', key, b.subarray(0, 12))
+  d.setAAD(Buffer.from(direction))
+  d.setAuthTag(b.subarray(b.length - 16))
+  return Buffer.concat([d.update(b.subarray(12, b.length - 16)), d.final()])
+}
+
+/**
+ * One live-control session at a time: the phone sees this laptop's screen and controls it.
+ * pc/live.py captures the screen and replays input; this side encrypts and carries it over
+ * Supabase Realtime, checks every message really came from the paired phone, and keeps the
+ * month's data under LIVE_CAP.
+ */
+class Live {
+  constructor(worker) {
+    this.w = worker
+    Object.assign(this, liveKeys(worker.conf.secret))
+    this.proc = null
+    this.sid = null
+    this.lastN = 0
+    this.lastSeen = 0
+    this.n = 0
+    this.timers = []
+    this.ended = new Set()
+    this.usage = { month: '', bytes: 0 }
+    try { this.usage = JSON.parse(readFileSync(USAGE_FILE, 'utf8')) } catch {}
+  }
+
+  month() {
+    const m = new Date().toISOString().slice(0, 7)
+    if (this.usage.month !== m) this.usage = { month: m, bytes: 0 }
+    return this.usage
+  }
+
+  saveUsage() { try { writeFileSync(USAGE_FILE, JSON.stringify(this.usage)) } catch {} }
+
+  send(obj, binary) {
+    const head = Buffer.from(JSON.stringify({ ...obj, n: ++this.n }) + '\n')
+    const d = seal(this.key, 'to-phone', binary ? Buffer.concat([head, binary]) : head)
+    if (!this.w.broadcast(this.topic, 'm', { d })) return 0
+    this.month().bytes += d.length
+    return d.length
+  }
+
+  state() {
+    const u = this.month()
+    this.send({ t: 'state', live: Boolean(this.proc), host: os.hostname(), used: u.bytes, cap: LIVE_CAP })
+  }
+
+  onMessage(d) {
+    let m
+    try { m = JSON.parse(unseal(this.key, 'to-laptop', d).toString('utf8')) } catch { return } // not from the paired phone
+    if (typeof m.ts !== 'number' || Math.abs(Date.now() - m.ts) > 120_000) return // too old: maybe replayed
+    if (this.ended.has(m.sid)) return // that session is over: its last messages may still be arriving
+    if (m.sid !== this.sid) {
+      if (m.t !== 'hello') return
+      if (this.proc) this.stop('A new live session started.', false)
+      this.sid = m.sid
+      this.lastN = 0
+    }
+    if (!(m.n > this.lastN)) return // seen it already
+    this.lastN = m.n
+    this.lastSeen = Date.now()
+    if (m.t === 'hello') {
+      const cfg = JSON.stringify([m.maxW, m.q, m.fps])
+      if (!this.proc) this.start(m)
+      else if (cfg !== this.cfg) this.toLive({ t: 'cfg', maxW: m.maxW, q: m.q, fps: m.fps }) // only when the phone changed it
+      this.cfg = cfg
+    } else if (m.t === 'bye') {
+      this.stop('Closed on the phone.')
+    } else {
+      this.toLive(m)
+    }
+  }
+
+  toLive(m) { try { this.proc?.stdin.write(JSON.stringify(m) + '\n') } catch {} }
+
+  start(m) {
+    if (this.month().bytes > LIVE_CAP) {
+      this.send({ t: 'end', why: `This month's live-control data is used up (${(LIVE_CAP / 1024 ** 3).toFixed(0)} GB, to keep Supabase free). It resets next month.` })
+      return
+    }
+    try { unlinkSync(HANDS_STOP) } catch {}
+    const python = this.w.conf.python || 'python'
+    const p = spawn(python, [path.join(HERE, 'live.py')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    this.proc = p
+    let err = ''
+    p.stderr.on('data', (x) => { err = (err + x).slice(-2000) })
+    p.stdin.on('error', () => {})
+    this.toLive({ t: 'cfg', maxW: m.maxW || 1280, q: m.q || 50, fps: m.fps || 4 })
+    createInterface({ input: p.stdout }).on('line', (line) => {
+      let f
+      try { f = JSON.parse(line) } catch { return }
+      if (f.t === 'frame') this.frame(f)
+      else if (f.t === 'stopped') this.stop(f.why)
+    })
+    p.on('exit', () => { if (this.proc === p) this.stop(err.trim().split('\n').pop() || 'The live screen stopped.') })
+    log('live control: the phone is connected')
+    this.w.desktop.send({ cmd: 'live', on: true })
+    this.state()
+    this.timers = [
+      setInterval(() => { if (Date.now() - this.lastSeen > 12_000) this.stop('The phone went quiet.') }, 2000),
+      setInterval(() => { this.state(); this.saveUsage() }, 10_000),
+    ]
+  }
+
+  frame(f) {
+    if (this.w.wsBacklog() > 2_000_000) return // the connection is behind: skip this one, the next will catch up
+    const parts = f.tiles.map((t) => Buffer.from(t[4], 'base64'))
+    const head = { t: 'frame', f: f.f, w: f.w, h: f.h, sw: f.sw, sh: f.sh, full: f.full, tiles: f.tiles.map((t, i) => [t[0], t[1], t[2], t[3], parts[i].length]) }
+    this.send(head, Buffer.concat(parts))
+    if (this.month().bytes > LIVE_CAP) this.stop(`This month's live-control data is used up (${(LIVE_CAP / 1024 ** 3).toFixed(0)} GB). It resets next month.`)
+  }
+
+  stop(why, tell = true) {
+    if (!this.proc) return
+    const p = this.proc
+    this.proc = null
+    try { p.stdin.write('{"t":"bye"}\n') } catch {}
+    setTimeout(() => { try { p.kill() } catch {} }, 1500)
+    for (const t of this.timers) clearInterval(t)
+    this.timers = []
+    if (tell) this.send({ t: 'end', why })
+    this.saveUsage()
+    this.ended.add(this.sid)
+    this.sid = null
+    this.w.desktop.send({ cmd: 'live', on: false })
+    log(`live control ended: ${why} (${(this.month().bytes / 1024 ** 2).toFixed(0)} MB used this month)`)
+  }
+}
+
 class Worker {
   constructor(conf) {
     this.conf = conf
     this.room = roomOf(conf.secret)
     this.voice = new Voice(conf)
-    this.desktop = new Desktop(conf, (id, text) => this.deskAsk(id, text))
+    this.desktop = new Desktop(conf, (id, text) => this.deskAsk(id, text), () => this.live.stop('Stopped at the laptop (Ctrl+Alt+J).'))
+    this.live = new Live(this)
+    this.broadcast = () => false
+    this.wsBacklog = () => 0
     this.lock = Promise.resolve() // one question at a time to agy, from the phone or the laptop
     this.agy = new Agy({ bin: conf.agy || path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'agy', 'bin', 'agy.exe'), agent: conf.agent || 'jarvis', model: conf.model || undefined, cwd: SCRATCH, log })
     this.draining = false
@@ -413,18 +574,30 @@ class Worker {
     await rpc(this.conf, 'jarvis_beat', { secret: this.conf.secret, p_host: os.hostname() }).catch((e) => log('check-in failed:', e.message))
   }
 
-  /* Supabase Realtime (Phoenix channels over WebSocket): the database pokes us when a job arrives. */
+  /**
+   * Supabase Realtime (Phoenix channels over WebSocket), two channels on one connection: the
+   * database pokes us when a job arrives, and the phone's live-control session talks to us.
+   */
   connect() {
     const ws = new WebSocket(`${this.conf.url.replace(/^http/, 'ws')}/realtime/v1/websocket?apikey=${encodeURIComponent(this.conf.key)}&vsn=1.0.0`)
     this.ws = ws
     const topic = `realtime:jarvis-${this.room}`
-    const send = (event, payload, t = topic) => ws.send(JSON.stringify({ topic: t, event, payload, ref: String(++this.wsRef), join_ref: t === topic ? '1' : undefined }))
+    const joins = { [topic]: '1', [this.live.topic]: '2' }
+    const send = (event, payload, t = topic) => ws.send(JSON.stringify({ topic: t, event, payload, ref: String(++this.wsRef), join_ref: joins[t] }))
+    this.broadcast = (t, event, payload) => {
+      if (ws.readyState !== 1 || this.ws !== ws) return false
+      send('broadcast', { type: 'broadcast', event, payload }, t)
+      return true
+    }
+    this.wsBacklog = () => ws.bufferedAmount || 0
     let hb
     ws.addEventListener('open', () => {
-      send('phx_join', {
-        config: { broadcast: { self: false, ack: false }, presence: { key: '' }, postgres_changes: [], private: false },
-        ...(this.conf.key.startsWith('eyJ') ? { access_token: this.conf.key } : {}),
-      })
+      for (const t of Object.keys(joins)) {
+        send('phx_join', {
+          config: { broadcast: { self: false, ack: false }, presence: { key: '' }, postgres_changes: [], private: false },
+          ...(this.conf.key.startsWith('eyJ') ? { access_token: this.conf.key } : {}),
+        }, t)
+      }
       hb = setInterval(() => { try { send('heartbeat', {}, 'phoenix') } catch {} }, 25_000)
     })
     ws.addEventListener('message', (m) => {
@@ -435,8 +608,12 @@ class Worker {
         if (ok && !this.joined) log('realtime connected - jobs arrive instantly')
         if (!ok) log('realtime join refused:', JSON.stringify(msg.payload).slice(0, 200))
         this.joined = ok
+      } else if (msg.event === 'phx_reply' && msg.topic === this.live.topic && msg.payload?.status !== 'ok') {
+        log('live-control channel refused:', JSON.stringify(msg.payload).slice(0, 200))
       } else if (msg.event === 'broadcast' && msg.topic === topic) {
         this.drain()
+      } else if (msg.event === 'broadcast' && msg.topic === this.live.topic && msg.payload?.event === 'm') {
+        this.live.onMessage(msg.payload.payload?.d)
       }
     })
     const retry = () => {

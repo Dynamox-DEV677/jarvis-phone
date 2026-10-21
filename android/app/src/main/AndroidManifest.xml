@@ -14,8 +14,6 @@
 
     <queries>
         <package android:name="com.termux" />
-        <!-- "Live screen" opens Chrome Remote Desktop when it's installed. -->
-        <package android:name="com.google.chromeremotedesktop" />
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
@@ -50,6 +48,14 @@
             </intent-filter>
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- Live control of the laptop. Rotating doesn't restart it (that would start a new session). -->
+        <activity
+            android:name=".LiveActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false"
+            android:theme="@style/Theme.Jarvis"
+            android:windowSoftInputMode="adjustNothing" />
 
         <activity
             android:name=".ShotActivity"

@@ -72,7 +72,21 @@ So "Hey Jarvis, tell Claude Code in my lantern session to fix the build" works, 
 
 **Keep the laptop awake:** in Windows Settings → System → Power, set sleep to *Never* while plugged in, and closing the lid to *Do nothing*. A sleeping laptop can't answer.
 
-**Live screen mirroring:** use Google's free **Chrome Remote Desktop**. On the laptop, go to remotedesktop.google.com/access and set up remote access with a PIN. On the phone, install the Chrome Remote Desktop app and sign in with the same Google account.
+**Live control from anywhere:** in the app, tap **Live control** on the laptop card to see the laptop's screen live and use it. Everything goes through your Supabase project, so it works on mobile data.
+- **Gestures:** tap = click, double-tap = double-click, long-press = right-click, two fingers up or down = scroll, pinch = zoom on the phone.
+- **Drag** makes one finger drag.
+- **Keyboard** types on the laptop and has shortcut keys (Esc, Tab, Enter, Ctrl+C/V/Z/A, Alt+Tab, arrows).
+
+How it works:
+- `pc/live.py` cuts the screen into tiles and sends only the ones that changed, so typing costs a few KB.
+- When a video or game keeps the whole screen changing, it drops to 2 smaller, softer pictures a second.
+- Everything is end-to-end encrypted (AES-256-GCM) with a key made from your pairing secret. Supabase only ever carries ciphertext, and only the paired phone can send clicks.
+- The laptop shows a **LIVE** banner while the phone is connected. **Ctrl+Alt+J** there ends it.
+- Leaving the live screen on the phone ends the session.
+
+Data: live frames count against Supabase's free **5 GB a month**, which the relay needs too. So the laptop stops live control at **3 GB a month**, and the app shows what's used. Rough cost: a still screen uses almost nothing, typing and browsing about 50–150 MB an hour, and a playing video about 500–800 MB an hour. **Data saver** in the live screen lowers that further.
+
+For long sessions or watching videos, Google's free **Chrome Remote Desktop** has no such limit. Set it up at remotedesktop.google.com/access.
 
 ## Phone-only setup (Termux)
 

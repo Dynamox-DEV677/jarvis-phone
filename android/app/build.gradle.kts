@@ -21,8 +21,8 @@ android {
         applicationId = "dev.kairo.jarvis"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
     }
 
     signingConfigs {
@@ -63,4 +63,6 @@ dependencies {
     // Google's QR scanner from Play services, for pairing with the laptop. Needs no camera permission.
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("com.google.android.gms:play-services-base:18.5.0")
+    // WebSocket for live control (Supabase Realtime).
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

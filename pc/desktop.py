@@ -317,6 +317,37 @@ def caption_pixels(who, text, W, s):
     return out
 
 
+def live_pill_pixels(s):
+    """The banner at the top while the phone has live control of this laptop."""
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    fonts = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    bold = ImageFont.truetype(os.path.join(fonts, "seguisb.ttf"), int(12.5 * s))
+    body = ImageFont.truetype(os.path.join(fonts, "segoeui.ttf"), int(12.5 * s))
+    a, b = "LIVE", "Your phone is viewing and controlling this laptop  ·  Ctrl+Alt+J to stop"
+    pad, dot = int(14 * s), int(8 * s)
+    w = pad + dot + int(8 * s) + int(bold.getlength(a)) + int(10 * s) + int(body.getlength(b)) + pad
+    h = int(32 * s)
+    m = int(14 * s)
+    img = Image.new("RGBA", (w + 2 * m, h + 2 * m), (0, 0, 0, 0))
+    sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).rounded_rectangle([m, m + int(3 * s), m + w, m + h + int(3 * s)], radius=h // 2, fill=(0, 0, 0, 140))
+    img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(6 * s)))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([m, m, m + w, m + h], radius=h // 2, fill=(14, 15, 19, 240), outline=(255, 138, 31, 170), width=max(1, int(s)))
+    cy = m + h // 2
+    x = m + pad
+    d.ellipse([x, cy - dot // 2, x + dot, cy + dot // 2], fill=(255, 77, 61, 255))
+    x += dot + int(8 * s)
+    d.text((x, cy), a, font=bold, fill=(255, 152, 56, 255), anchor="lm")
+    x += int(bold.getlength(a)) + int(10 * s)
+    d.text((x, cy), b, font=body, fill=(232, 230, 226, 255), anchor="lm")
+    rgba = np.asarray(img).astype(np.float32)
+    px = np.empty(rgba.shape, np.uint8)
+    px[..., 0:3] = (rgba[..., [2, 1, 0]] * rgba[..., 3:4] / 255).astype(np.uint8)
+    px[..., 3] = rgba[..., 3].astype(np.uint8)
+    return px
+
+
 class Glow:
     """The two edge lights, the sparks and the caption. Lives on the UI thread; animates only while showing."""
 
@@ -335,6 +366,7 @@ class Glow:
         self.spark_l, self.spark_r = Layer(), Layer()
         self.spark_l.set_pixels(spark, -self.rx, -2 * self.ry, 0)
         self.spark_r.set_pixels(spark, W - self.rx, H, 0)
+        self.pill = None
         self.cap = Layer()
         self.cap_xy = (0, 0)
         self.has_cap = False
@@ -360,6 +392,16 @@ class Glow:
         self.enter_target = 0.0
         self.cap_hide_at = time.monotonic() + caption_after
         self._run()
+
+    def set_live(self, on):
+        if on:
+            if self.pill is None:
+                self.pill = Layer()
+                px = live_pill_pixels(self.s)
+                self.pill.set_pixels(px, (self.W - px.shape[1]) // 2, int(4 * self.s), 255)
+            self.pill.show()
+        elif self.pill:
+            self.pill.hide()
 
     def set_level(self, v):
         self.input = v
@@ -708,6 +750,7 @@ def make_chime():
 class Jarvis:
     def __init__(self, glow):
         self.glow = glow
+        self.live = False
         self.state = "idle"
         self.turn = 0
         self.asks = {}
@@ -725,8 +768,19 @@ class Jarvis:
             log(f"can't listen for \"Hey Jarvis\": {type(e).__name__}: {e}. Ctrl+Alt+J still works.")
             emit("ready")
 
+    def set_live(self, on):
+        self.live = on
+        ui(lambda: self.glow.set_live(on))
+
     def activate(self, source):
         """The wake word or the hotkey: talk if idle, otherwise stop - JARVIS's hands too (pc/hands.py)."""
+        if source == "hotkey" and self.live:  # the phone has live control: Ctrl+Alt+J ends that first
+            try:
+                open(HANDS_STOP, "w").close()
+            except OSError:
+                pass
+            emit("live_stop")
+            return
         if self.state == "idle":
             self.listen()
         elif source == "hotkey":
@@ -837,6 +891,8 @@ def read_commands(j):
         elif cmd == "say":
             j.turn += 1
             j.say(m.get("text", ""))
+        elif cmd == "live":
+            j.set_live(bool(m.get("on")))
     user32.PostThreadMessageW(MAIN_TID, WM_QUIT, 0, 0)  # the worker has gone: so do we
 
 

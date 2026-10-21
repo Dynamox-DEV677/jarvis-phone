@@ -374,7 +374,7 @@ class MainActivity : Activity() {
             Pill("Screenshot", LineIcon.Kind.IMAGE, Style.SECONDARY) {
                 if (!canRun()) askForMissing() else JarvisService.send(this, JarvisService.ACTION_ASK, "send me a screenshot")
             },
-            Pill("Live screen", LineIcon.Kind.SCREEN, Style.SECONDARY) { openRemoteDesktop() },
+            Pill("Live control", LineIcon.Kind.SCREEN, Style.SECONDARY) { openLive() },
         ), lp(top = 16))
         paired.addView(Pill("Pair again", LineIcon.Kind.SCAN, Style.GHOST) { scanPairing() }, lp(top = 6))
         lap.addView(unpaired); lap.addView(paired)
@@ -554,25 +554,8 @@ class MainActivity : Activity() {
         brain.health { ok, msg -> status.text = msg; status.setTextColor(if (ok) good else orange); checkConnection() }
     }
 
-    /** Live screen: Google's free Chrome Remote Desktop. */
-    private fun openRemoteDesktop() {
-        val pkg = "com.google.chromeremotedesktop"
-        val app = packageManager.getLaunchIntentForPackage(pkg)
-        if (app != null) { startActivity(app); return }
-        AlertDialog.Builder(this)
-            .setTitle("See your laptop live")
-            .setMessage(
-                "This uses Google's free Chrome Remote Desktop.\n\n" +
-                    "1. On the laptop, open remotedesktop.google.com/access in Chrome and turn on remote access (you pick a PIN).\n" +
-                    "2. Install Chrome Remote Desktop on this phone and sign in with the same Google account.",
-            )
-            .setPositiveButton("Get the app") { _, _ ->
-                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))) }
-                    .onFailure { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))) }
-            }
-            .setNegativeButton("Later", null)
-            .show()
-    }
+    /** Live control of the laptop, through Supabase (LiveActivity). */
+    private fun openLive() = startActivity(Intent(this, LiveActivity::class.java))
 
     private fun setWake(on: Boolean, note: TextView) {
         if (!on) { prefs.wakeWord = false; note.text = ""; refreshService(); renderStatus(); return }
