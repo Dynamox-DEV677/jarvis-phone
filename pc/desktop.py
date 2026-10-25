@@ -16,6 +16,7 @@ Try the glow on its own:  python desktop.py --demo
 Needs:  python -m pip install --user vosk sounddevice faster-whisper pillow edge-tts
 """
 import asyncio
+import collections
 import ctypes
 import gc
 import json
@@ -512,6 +513,23 @@ def ensure_wake_model():
     return path
 
 
+class Agc:
+    """Automatic gain: some laptop mics come in very quiet (Darshan's peaks near 40 of 32767 in a quiet
+    room), and the wake-word model misses "Hey Jarvis" below a peak of about 300-800. Boost each 0.1 s
+    chunk so speech peaks near TARGET, judged on the last 2 s including this chunk (so loud speech is
+    never clipped), and never by more than MAX_GAIN."""
+    TARGET, MAX_GAIN, FLOOR = 6000.0, 24.0, 60.0
+
+    def __init__(self):
+        self.peaks = collections.deque(maxlen=20)
+
+    def __call__(self, data):
+        x = np.frombuffer(data, np.int16).astype(np.float32)
+        self.peaks.append(float(np.max(np.abs(x))) if len(x) else 0.0)
+        gain = min(self.MAX_GAIN, max(1.0, self.TARGET / max(max(self.peaks), self.FLOOR)))
+        return np.clip(x * gain, -32768, 32767).astype(np.int16).tobytes() if gain > 1.0 else data
+
+
 class Ears:
     def __init__(self, on_wake):
         import sounddevice as sd
@@ -525,6 +543,7 @@ class Ears:
         self.mode = "wake"
         self.noise = 0.01
         self.on_level = lambda v: None
+        self.agc = Agc()
         self.src_rate = RATE
         try:
             self.stream = sd.RawInputStream(samplerate=RATE, blocksize=RATE // 10, dtype="int16", channels=1, callback=self._cb)
@@ -547,14 +566,19 @@ class Ears:
                 x = np.frombuffer(data, np.int16).astype(np.float32)
                 n = int(len(x) * RATE / self.src_rate)
                 data = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype(np.int16).tobytes()
+            data = self.agc(data)
             level = float(np.sqrt(np.mean((np.frombuffer(data, np.int16).astype(np.float32) / 32768) ** 2)))
             if self.mode == "wake":
                 self.noise = 0.98 * self.noise + 0.02 * min(level, 0.05)
                 if self.rec.AcceptWaveform(data):
                     r = json.loads(self.rec.Result())
-                    if any(w.get("word") == "jarvis" and w.get("conf", 1) >= 0.6 for w in r.get("result", [])):
+                    confs = [w.get("conf", 1) for w in r.get("result", []) if w.get("word") == "jarvis"]
+                    if any(c >= 0.6 for c in confs):
+                        log('heard "Jarvis"')
                         self.mode = "off"
                         self.on_wake("voice")
+                    elif confs:  # so a missed wake word shows up in the log
+                        log(f'heard something like "Jarvis" but wasn\'t sure ({max(confs):.2f}) - say it a little clearer')
             elif self.mode == "record":
                 self._record(data, level)
 
@@ -810,7 +834,10 @@ class Jarvis:
         if my != self.turn:
             return
         if pcm is None:
-            return self.finish()
+            # Woke up but no question followed: say so instead of vanishing.
+            log("woke up but didn't hear a question - ask right after the chime")
+            ui(lambda: self.glow.caption("You", "(I didn't hear a question - try again)"))
+            return threading.Timer(1.8, lambda: my == self.turn and self.finish()).start()
         self.state = "thinking"
         ui(lambda: self.glow.set("thinking"))
         try:
@@ -896,7 +923,29 @@ def read_commands(j):
     user32.PostThreadMessageW(MAIN_TID, WM_QUIT, 0, 0)  # the worker has gone: so do we
 
 
+def quick_edit_off():
+    """Clicking inside JARVIS's console window starts a text selection (Windows "QuickEdit"), and that
+    freezes the whole worker - phone and "Hey Jarvis" both - until Esc is pressed. It happened once.
+    Switch QuickEdit off for that window only. cmd.exe puts the mode back after each command it runs, and
+    this helper runs in a hidden console of its own (the worker starts it with windowsHide), so a tiny
+    child process attaches to the worker's console - the visible window - and changes it there."""
+    code = ("import ctypes,sys\n"
+            "k=ctypes.WinDLL('kernel32')\n"
+            "k.FreeConsole()\n"
+            "if not k.AttachConsole(int(sys.argv[1])): sys.exit(1)\n"
+            "k.CreateFileW.restype=ctypes.c_void_p\n"
+            "h=ctypes.c_void_p(k.CreateFileW('CONIN$',0xC0000000,3,None,3,0,None))\n"
+            "m=ctypes.c_uint()\n"
+            "if k.GetConsoleMode(h,ctypes.byref(m)): k.SetConsoleMode(h,(m.value|0x80)&~0x40)\n")
+    import subprocess
+    try:
+        subprocess.run([sys.executable, "-c", code, str(os.getppid())], creationflags=0x08000000, timeout=10)  # CREATE_NO_WINDOW
+    except Exception as e:
+        log(f"couldn't switch off QuickEdit: {e}")
+
+
 def main():
+    quick_edit_off()
     msg = wintypes.MSG()
     user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)  # make this thread's message queue now
     glow = Glow()
