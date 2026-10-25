@@ -688,10 +688,33 @@ def mci(cmd):
     return buf.value
 
 
+def sentences(text):
+    """Speech pieces for pipelining: whole sentences, with very short ones joined to the next."""
+    out = []
+    for p in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if out and len(out[-1]) < 40:
+            out[-1] += " " + p
+        elif p:
+            out.append(p)
+    return out or [text]
+
+
 class Mouth:
+    """Speaks a reply sentence by sentence: the first sentence is recorded (~1 s) and starts playing
+    while the next one is recorded, instead of recording the whole reply first (3-8 s of silence for a
+    long answer). The voice is warmed up at start, because its first use costs ~9 s."""
+
     def __init__(self):
         self.serial = 0
         self.dir = tempfile.mkdtemp(prefix="jarvis-voice-")
+        threading.Thread(target=lambda: self._try(lambda: asyncio.run(_synth("Ready."))), daemon=True).start()
+
+    @staticmethod
+    def _try(fn):
+        try:
+            return fn()
+        except Exception as e:
+            return e
 
     def speak(self, text, on_word, done):
         self.serial += 1
@@ -702,42 +725,58 @@ class Mouth:
 
     def _run(self, my, text, on_word, done):
         try:
-            try:
-                audio, words = asyncio.run(_synth(text))
-            except Exception as e:  # no internet or the voice service changed: the laptop's own voice
-                log(f"voice: {type(e).__name__}: {e} - using Windows' voice")
-                self._windows_voice(my, text, on_word)
-                return
-            if my != self.serial:
-                return
-            path = os.path.join(self.dir, f"r{my}.mp3")
-            with open(path, "wb") as f:
-                f.write(audio)
-            alias = f"jv{my}"
-            mci(f'open "{path}" type mpegvideo alias {alias}')
-            try:
-                mci(f"set {alias} time format milliseconds")
-                mci(f"play {alias}")
-                i = 0
-                while my == self.serial:
-                    pos = int(mci(f"status {alias} position") or 0) / 1000
-                    while i < len(words) and pos >= words[i]:
-                        i += 1
-                        on_word()
-                    if mci(f"status {alias} mode") != "playing":
+            parts = sentences(text)
+            ready = [threading.Event() for _ in parts]
+            clips = [None] * len(parts)
+
+            def record_all():  # one after another, staying a sentence ahead of the playback
+                for k, p in enumerate(parts):
+                    if my != self.serial:
                         break
-                    time.sleep(0.03)
-            finally:
-                mci(f"close {alias}")
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+                    clips[k] = self._try(lambda p=p: asyncio.run(_synth(p)))
+                    ready[k].set()
+            threading.Thread(target=record_all, daemon=True).start()
+
+            for k in range(len(parts)):
+                ready[k].wait(30)
+                if my != self.serial:
+                    return
+                clip = clips[k]
+                if clip is None or isinstance(clip, Exception):  # no internet or the voice service changed
+                    log(f"voice: {type(clip).__name__ if clip else 'timed out'}: {clip or ''} - using Windows' voice")
+                    self._windows_voice(my, " ".join(parts[k:]), on_word)
+                    return
+                self._play(my, k, *clip, on_word)
         except Exception as e:
             log(f"voice failed: {e}")
         finally:
             if my == self.serial:
                 done()
+
+    def _play(self, my, k, audio, words, on_word):
+        path = os.path.join(self.dir, f"r{my}-{k}.mp3")
+        with open(path, "wb") as f:
+            f.write(audio)
+        alias = f"jv{my}x{k}"
+        mci(f'open "{path}" type mpegvideo alias {alias}')
+        try:
+            mci(f"set {alias} time format milliseconds")
+            mci(f"play {alias}")
+            i = 0
+            while my == self.serial:
+                pos = int(mci(f"status {alias} position") or 0) / 1000
+                while i < len(words) and pos >= words[i]:
+                    i += 1
+                    on_word()
+                if mci(f"status {alias} mode") != "playing":
+                    break
+                time.sleep(0.03)
+        finally:
+            mci(f"close {alias}")
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     def _windows_voice(self, my, text, on_word):
         import subprocess

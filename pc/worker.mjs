@@ -123,7 +123,13 @@ async function pair(conf) {
 
 /* ── jobs ─────────────────────────────────────────────────────────────────── */
 
-const REMOTE_NOTE = 'This request came from my phone through JARVIS, maybe from outside home. Keep the answer short and plain, with no markdown: it will be read aloud on the phone. ' +
+// Measured on Darshan's laptop (2026-10-25, warm agy, one-line answers): the default model with slash
+// commands reloading on every turn took 14-15 s; Gemini 3.8 Flash Medium with --disable-slash-commands
+// took 9-11 s, and skills still load. relay.json "model" and "agyArgs" override these.
+const FAST_MODEL = 'gemini-3.8-flash-medium'
+const FAST_ARGS = ['--disable-slash-commands']
+
+const REMOTE_NOTE ='This request came from my phone through JARVIS, maybe from outside home. Keep the answer short and plain, with no markdown: it will be read aloud on the phone. ' +
   'Any screenshot you take is sent to the phone automatically, so take one when it helps show what happened. ' +
   'Nobody is at the laptop to approve a permission prompt: to use apps on the laptop (Claude included), use your desktop_* and claude_desktop tools. ' +
   'In this run do not delete, uninstall, or change system settings; if the task needs that, stop and say what you would do instead.\n\nRequest: '
@@ -482,7 +488,10 @@ class Worker {
     this.broadcast = () => false
     this.wsBacklog = () => 0
     this.lock = Promise.resolve() // one question at a time to agy, from the phone or the laptop
-    this.agy = new Agy({ bin: conf.agy || path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'agy', 'bin', 'agy.exe'), agent: conf.agent || 'jarvis', model: conf.model || undefined, cwd: SCRATCH, log })
+    this.agy = new Agy({
+      bin: conf.agy || path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'agy', 'bin', 'agy.exe'),
+      agent: conf.agent || 'jarvis', model: conf.model || FAST_MODEL, extraArgs: conf.agyArgs || FAST_ARGS, cwd: SCRATCH, log,
+    })
     this.draining = false
     this.again = false
     this.joined = false
@@ -537,8 +546,22 @@ class Worker {
       try { unlinkSync(HANDS_STOP) } catch {} // a new request: JARVIS may use its hands again (pc/hands.py)
       const idle = this.agy.lastUsed && Date.now() - this.agy.lastUsed > 30 * 60_000
       if (!this.agy.running || idle) this.agy.start()
-      return this.agy.ask(prompt, (ev) => { log('  tool', ev.name); onTool(ev.name) })
+      const notes = this.agy.primed ? '' : this.context()
+      this.agy.primed = true
+      return this.agy.ask(notes + prompt, (ev) => { log('  tool', ev.name); onTool(ev.name) })
     })
+  }
+
+  /** relay.json "contextFile": notes JARVIS gets at the start of each conversation (e.g. a digest of
+   *  his own files), so everyday questions need no file reads - each read is another model step, 4-5 s. */
+  context() {
+    if (!this.conf.contextFile) return ''
+    try {
+      const text = readFileSync(this.conf.contextFile, 'utf8').slice(0, 6000).trim()
+      return text ? `Background notes about me, for reference - answer from them when they are enough, instead of opening files:\n${text}\n\n---\n` : ''
+    } catch {
+      return ''
+    }
   }
 
   /** "Hey Jarvis" at the laptop: think, and send the answer back to be spoken. */
@@ -633,6 +656,7 @@ class Worker {
     await this.beat()
     log(`JARVIS laptop worker ${VERSION} is running on ${os.hostname()}. Keep this window open.`)
     this.agy.start() // warm up, so the first question doesn't wait for agy to start
+    this.voice.speak('Online, sir.').catch(() => {}) // and the voice: its first use costs ~9 s (imports, TLS)
     this.desktop.start()
     if (typeof WebSocket === 'function') this.connect()
     setInterval(() => this.beat(), 20_000)

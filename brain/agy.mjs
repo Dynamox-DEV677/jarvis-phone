@@ -33,6 +33,7 @@ export class Agy {
 
   start() {
     this.stop()
+    this.primed = false // a fresh conversation: the caller may send background notes again
     const { bin, agent, model, extraArgs, cwd } = this.opts
     const args = ['--agent', agent, '--input-format', 'stream-json', '--output-format', 'stream-json']
     if (model) args.push('--model', model)
