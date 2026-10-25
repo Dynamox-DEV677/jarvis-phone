@@ -3,6 +3,7 @@ title JARVIS laptop
 rem Lets JARVIS on your phone use this laptop from anywhere, through your Supabase project,
 rem and answers "Hey Jarvis" (or Ctrl+Alt+J) on the laptop itself, with the orange glow.
 rem Keep this window open (it can be minimised). Close it to stop JARVIS.
+rem If the worker ever crashes it restarts by itself; closing this window is the only way to stop it.
 where node >nul 2>nul || (echo Node.js isn't installed. Get it from https://nodejs.org & pause & exit /b 1)
 python -c "import sys" >nul 2>nul || goto run
 rem JARVIS's voice (edge-tts). Microsoft changes its voice service now and then, and new
@@ -15,4 +16,7 @@ echo Setting up "Hey Jarvis", JARVIS's hands and live control on this laptop (fi
 python -m pip install --user --quiet --disable-pip-version-check --no-warn-script-location vosk sounddevice faster-whisper pillow uiautomation mss
 :run
 node "%~dp0worker.mjs"
-pause
+echo.
+echo JARVIS stopped. Restarting in 10 seconds - close this window to stop it for good.
+timeout /t 10 /nobreak >nul
+goto run
